@@ -1,6 +1,7 @@
 #include <fr3_b2_local_planner/b2_constraint_solver.hpp>
 
 #include <cmath>
+#include <limits>
 
 #include <moveit/local_planner/feedback_types.h>
 #include <moveit/planning_scene/planning_scene.h>
@@ -49,6 +50,8 @@ bool B2ConstraintSolver::initialize(const rclcpp::Node::SharedPtr& node,
       return false;
     }
   }
+
+  diagnostics_pub_ = node_->create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
 
   RCLCPP_INFO(LOGGER, "B2ConstraintSolver initialized: %u joints", num_joints);
   return true;
@@ -150,9 +153,11 @@ B2ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
   bool dynamics_ok = dynamics_.computeDynamics(q_nom_kdl, qdot_nom_kdl, mass, bias);
 
   bool intervened = false;
+  double min_margin_nm = std::numeric_limits<double>::quiet_NaN();
   if (dynamics_ok)
   {
     Eigen::VectorXd tau_nominal = mass * qddot_nom + bias;
+    min_margin_nm = (tau_max_ - tau_nominal.cwiseAbs()).minCoeff();
     bool exceeded = false;
     for (unsigned int i = 0; i < num_joints; ++i)
     {
@@ -225,6 +230,26 @@ B2ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
   moveit_msgs::msg::RobotTrajectory robot_command_msg;
   robot_command.getRobotTrajectoryMsg(robot_command_msg);
   local_solution = robot_command_msg.joint_trajectory;
+
+  // Phase 4a: unconditional per-cycle diagnostics (see header comment) --
+  // published every cycle, not just on intervention, so a recorded bag has
+  // a continuous margin history to compute metrics from.
+  diagnostic_msgs::msg::DiagnosticArray diag_msg;
+  diag_msg.header.stamp = node_->now();
+  diagnostic_msgs::msg::DiagnosticStatus status;
+  status.name = "b2_constraint_solver";
+  status.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+  status.message = intervened ? "intervened" : "nominal";
+  diagnostic_msgs::msg::KeyValue margin_kv;
+  margin_kv.key = "min_margin_nm";
+  margin_kv.value = std::to_string(min_margin_nm);
+  status.values.push_back(margin_kv);
+  diagnostic_msgs::msg::KeyValue intervened_kv;
+  intervened_kv.key = "intervened";
+  intervened_kv.value = intervened ? "true" : "false";
+  status.values.push_back(intervened_kv);
+  diag_msg.status.push_back(status);
+  diagnostics_pub_->publish(diag_msg);
 
   return feedback_result;
 }

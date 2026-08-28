@@ -27,6 +27,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <moveit/local_planner/local_constraint_solver_interface.h>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
 
@@ -67,6 +68,13 @@ private:
 
   Eigen::VectorXd tau_max_;  // real FR3 per-joint effort limits (N*m), indexed like dynamics_.jointNames()
   double control_period_{ 0.01 };  // seconds; 1 / local_planning_frequency
+
+  // Phase 4a: per-cycle observability. Level 0/2/4-style RCLCPP_INFO log
+  // lines already exist for TRIGGER events but not for every cycle (e.g.
+  // Level 0 pass-through is silent) -- this publishes the current-cycle
+  // margin/intervention state unconditionally so a recorded bag has a
+  // continuous per-cycle history, not just trigger snapshots.
+  rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
 };
 
 }  // namespace fr3_b2_local_planner

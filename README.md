@@ -4,7 +4,7 @@ Real Franka FR3 kinematics + MoveIt 2 Hybrid Planning + MuJoCo execution, built 
 
 The paper's core claim is a certificate-driven, predictive local planner (**B3**) that catches a future torque violation before it happens, versus a reactive baseline (**B2**) that only checks the current instant. This platform ports both, plus the reduced-order Python reference's Level 0-4 response hierarchy, into real MoveIt 2 Hybrid Planning C++ plugins running against MuJoCo-simulated FR3 dynamics — not a toy model.
 
-## Status: Phases 0–3d done. Phase 4 (experiment suite + metrics) not started.
+## Status: Phases 0–3d and 4a done. Phase 4b (payload sweep) not started.
 
 ## Architecture
 
@@ -72,6 +72,7 @@ Ordering per route: **retime → reshape → reroute**, tried only if the previo
 - **Phase 3b**: Level 1 (route-level retiming). New shared `torque_margin_certificate.{hpp,cpp}` (extracted `B3ConstraintSolver`'s margin math so the route-level search reuses it) + `route_retime_search.{hpp,cpp}`.
 - **Phase 3c**: Level 2 (reshape), online + route-level. New `reshape_qp.{hpp,cpp}`, a much larger sparse OSQP QP than B2's single-step one (`3 × num_joints × n` variables).
 - **Phase 3d**: Level 3 (reroute). New `via_point_trajectory.{hpp,cpp}` (two-segment quintic stop-and-go candidate, ported from `code/trajectory.py::ViaPointTrajectory`). Reused Level 1/2's own machinery unchanged to evaluate/fix the candidate — genuinely small new code surface for what the hierarchy diagram makes look like a big phase. Verified: the mechanism (candidate construction, margin evaluation, retime/reshape cascade on the alternate, correct fallthrough) works correctly in every trial; the *specific* via-point offsets tried (6 trials, several directions/magnitudes/joint combinations) consistently made a wrist-joint-tight test scenario worse, not better — the stop-and-go candidate's own extra peak-acceleration demand outweighed any gravity-loading benefit found, and this held even after retiming the candidate up to `lam_max`. See `fr3_b3_local_planner/config/b3_params_reroute_test.yaml`'s header for the full finding.
+- **Phase 4a**: observability + metrics harness, the first slice of "port the experiment suite" (a large, multi-experiment body of work in the Python reference — split the same way Phase 3 was split into 3a–3d). Added `/diagnostics` (`diagnostic_msgs/DiagnosticArray`, no new interface package needed) published every cycle by both `B2ConstraintSolver` and `B3ConstraintSolver` — the per-cycle state that had no log line before (Level 0 pass-through is silent). New `scripts/run_experiment.py` (formalizes the manual pkill → fresh domain ID → launch → poll-ready → send-goal dance every prior phase did by hand into a reusable harness that also drives `ros2 bag record`) and `scripts/compute_metrics.py` (reads the bag via `rosbag2_py`, computes a deliberately-scoped subset of `code/metrics.py::RunMetrics`'s fields). Verified: B1 (stock)/B2/B3 all succeed on the standard within-limits goal with near-identical final error and zero interventions for B2/B3 — the direct analog of the Python reference's own Exp 1 "no regression" check. Along the way, found the real controller has a genuine steady-state joint-space tracking residual (~0.045–0.05 rad L2, confirmed stable across a 1s settle window, not a transient) that the `HybridPlanner` action's own "SUCCESS" doesn't reflect — `compute_metrics.py`'s success tolerance is set from this measured floor, not an idealized number.
 
 ## Real bugs found and fixed along the way (worth knowing before you touch this code)
 
@@ -119,6 +120,8 @@ Test scripts live in `scripts/`:
 - `scripts/test_fr3_hybrid_planning.py` — small within-limits goal, the standard "zero interventions" regression check.
 - `scripts/test_fr3_large_move.py` — large/fast goal, used to tune every Phase 3b/3c/3d verification scenario against real measured dynamics.
 - `scripts/sample_progress.py` — sends the large move and samples `/joint_states` at a fixed elapsed wall-clock time (bounded window, so it doesn't need to wait for full completion or risk the crash window below); used to compare execution progress between runs (e.g. nominal vs. Level-1-retimed).
+- `scripts/run_experiment.py` — Phase 4a's harness: launch + poll-ready + `ros2 bag record` (`/joint_states`, `/diagnostics`, `/rosout`) + send the standard goal + teardown, in one command. `python3 run_experiment.py --launch-file fr3_b3_demo.launch.py --bag-dir /tmp/some_run`.
+- `scripts/compute_metrics.py` — reads a bag `run_experiment.py` produced and prints `final_pos_error_rad`/`task_success`/`min_margin`/`online_intervention_count`/route-level event counts. `python3 compute_metrics.py /tmp/some_run`.
 
 Run any of them with the conda env's own interpreter (plain `python3` on `PATH` resolves to the wrong one on this machine):
 ```bash
@@ -127,8 +130,10 @@ Run any of them with the conda env's own interpreter (plain `python3` on `PATH` 
 
 ## Next steps
 
-1. **Phase 4: port the experiment suite + metrics** onto ROS-bag-recorded data — this is where the platform stops being infrastructure and starts producing numbers that could go in the paper. The full Level 0-4 hierarchy is now in place, so this is the next real milestone.
-2. **Phase 5: run, verify, fold real numbers into the paper.**
-3. **Optional, not blocking: find a via-point offset that actually recovers margin.** Phase 3d's own verification found 6 tried offsets all made a specific test scenario worse (see Phase 3d history above) — the mechanism is correct, but nobody has yet found a case where Level 3 demonstrably helps. Worth a fresh empirical pass with `B3_DEBUG_HORIZON` if a real experiment in Phase 4 needs it, but not worth chasing for its own sake.
-4. **Sanity-check `m_safe = 2.0`** at real FR3 scale once there's a concrete experiment to check it against (see "Known environmental gaps").
-5. This repo's commits are **local-only, never pushed** (per explicit instruction) — decide at some point whether/where this should go (a real remote, or fold into the main `replan` paper repo's scope despite its current `.gitignore` exclusion).
+1. **Phase 4b: payload sweep** (Exp 2 analog). Needs a way to attach a mass at `attachment_site` on `fr3_link7` (confirmed present in `fr3.xml`, not yet used for this) — not built.
+2. **Phase 4c: external end-effector force injection** (Exp 3/4 analogs — reactive-vs-predictive detection lead time, the paper's other headline comparison besides Level 3's reroute). Needs both `xfrc_applied`-equivalent force injection into MuJoCo AND a `J(q)^T @ F_ext` term threaded through `fr3_dynamics`/the certificate, which currently has **no external-force handling anywhere** — real new engineering, not config.
+3. **Phase 4d: flagship reroute + severity sweep + environment-conditioned reroute** (Exp 5/6/7 analogs), reusing Phase 3d's Level 3 + Phase 4b's payload + Phase 4c's force injection together.
+4. **Phase 5: run everything, fold real numbers into the paper.**
+5. **Optional, not blocking: find a via-point offset that actually recovers margin.** Phase 3d's own verification found 6 tried offsets all made a specific test scenario worse (see Phase 3d history above) — the mechanism is correct, but nobody has yet found a case where Level 3 demonstrably helps. Worth a fresh empirical pass with `B3_DEBUG_HORIZON` if a real experiment in Phase 4b/c/d needs it, but not worth chasing for its own sake.
+6. **Sanity-check `m_safe = 2.0`** at real FR3 scale once there's a concrete experiment to check it against (see "Known environmental gaps").
+7. This repo's commits are **local-only, never pushed** (per explicit instruction) — decide at some point whether/where this should go (a real remote, or fold into the main `replan` paper repo's scope despite its current `.gitignore` exclusion).

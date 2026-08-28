@@ -22,6 +22,7 @@
   <depend>pluginlib</depend>
   <depend>fr3_dynamics</depend>
   <depend>orocos_kdl_vendor</depend>
+  <depend>diagnostic_msgs</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

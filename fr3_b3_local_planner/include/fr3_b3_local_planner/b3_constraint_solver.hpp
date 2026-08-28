@@ -21,6 +21,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <moveit/local_planner/local_constraint_solver_interface.h>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
 #include <fr3_b3_local_planner/torque_margin_certificate.hpp>
@@ -46,6 +47,12 @@ public:
         trajectory_msgs::msg::JointTrajectory& local_solution) override;
 
 private:
+  // Phase 4a: publishes a DiagnosticArray with level/m_phys/binding_step
+  // KeyValue pairs -- m_phys is NaN when not evaluated this cycle (the
+  // sticky-brake continuation branch doesn't re-run the certificate, by
+  // design; see solve()'s own comment).
+  void publishDiagnostics(const std::string& level, double m_phys, int binding_step);
+
   rclcpp::Node::SharedPtr node_;
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
   std::string group_name_;
@@ -70,6 +77,10 @@ private:
   // reached, ignoring the nominal horizon entirely, rather than
   // re-evaluating the certificate every cycle.
   bool braked_{ false };
+
+  // Phase 4a: per-cycle observability -- see B2's own header comment for
+  // why this is unconditional (Level 0 pass-through has no log line today).
+  rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
 };
 
 }  // namespace fr3_b3_local_planner

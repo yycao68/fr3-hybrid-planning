@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 
 #include <moveit/local_planner/feedback_types.h>
@@ -81,6 +82,7 @@ bool B3ConstraintSolver::initialize(const rclcpp::Node::SharedPtr& node,
   delta_tau_ = delta_tau_fraction * tau_max_;
 
   braked_ = false;
+  diagnostics_pub_ = node_->create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
   RCLCPP_INFO(LOGGER, "B3ConstraintSolver initialized: %u joints, m_safe=%.3f Nm, delta_tau_fraction=%.3f",
               num_joints, m_safe_, delta_tau_fraction);
   return true;
@@ -90,6 +92,30 @@ bool B3ConstraintSolver::reset()
 {
   braked_ = false;
   return true;
+}
+
+void B3ConstraintSolver::publishDiagnostics(const std::string& level, double m_phys, int binding_step)
+{
+  diagnostic_msgs::msg::DiagnosticArray diag_msg;
+  diag_msg.header.stamp = node_->now();
+  diagnostic_msgs::msg::DiagnosticStatus status;
+  status.name = "b3_constraint_solver";
+  status.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+  status.message = "level " + level;
+  diagnostic_msgs::msg::KeyValue level_kv;
+  level_kv.key = "level";
+  level_kv.value = level;
+  status.values.push_back(level_kv);
+  diagnostic_msgs::msg::KeyValue m_phys_kv;
+  m_phys_kv.key = "m_phys";
+  m_phys_kv.value = std::to_string(m_phys);
+  status.values.push_back(m_phys_kv);
+  diagnostic_msgs::msg::KeyValue binding_step_kv;
+  binding_step_kv.key = "binding_step";
+  binding_step_kv.value = std::to_string(binding_step);
+  status.values.push_back(binding_step_kv);
+  diag_msg.status.push_back(status);
+  diagnostics_pub_->publish(diag_msg);
 }
 
 moveit_msgs::action::LocalPlanner::Feedback
@@ -121,6 +147,7 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
     moveit_msgs::msg::RobotTrajectory msg;
     robot_command.getRobotTrajectoryMsg(msg);
     local_solution = msg.joint_trajectory;
+    publishDiagnostics("4", std::numeric_limits<double>::quiet_NaN(), -1);
     return feedback_result;
   }
 
@@ -154,6 +181,7 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
     }
   }
 
+  std::string level_str;
   if (m_phys >= m_safe_)
   {
     // Level 0: pass the horizon's first waypoint through unmodified, same
@@ -162,15 +190,18 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
     // execution path itself once the decision is "proceed."
     const double duration = local_trajectory.getWayPointDurationFromPrevious(0);
     robot_command.addSuffixWayPoint(local_trajectory.getWayPoint(0), duration);
+    level_str = "0";
   }
   else if (used_reshape)
   {
     RCLCPP_INFO(LOGGER, "B3: Level 2 (reshape) applied: margin %.3f -> %.3f", m_phys, reshape_margin);
     const double duration = reshaped->getWayPointDurationFromPrevious(0);
     robot_command.addSuffixWayPoint(reshaped->getWayPoint(0), duration);
+    level_str = "2";
   }
   else
   {
+    level_str = "4";
     // Level 4 trigger. binding_step > 0 here means the certificate caught
     // a violation at a FUTURE horizon step before the current step (step 0)
     // itself was in violation -- the genuinely predictive case this phase
@@ -221,6 +252,7 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
   moveit_msgs::msg::RobotTrajectory robot_command_msg;
   robot_command.getRobotTrajectoryMsg(robot_command_msg);
   local_solution = robot_command_msg.joint_trajectory;
+  publishDiagnostics(level_str, m_phys, binding_step);
   return feedback_result;
 }
 

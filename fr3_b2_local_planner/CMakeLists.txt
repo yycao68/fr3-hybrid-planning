@@ -24,6 +24,7 @@ find_package(fr3_dynamics REQUIRED)
 find_package(orocos_kdl_vendor REQUIRED)
 find_package(orocos_kdl REQUIRED)
 find_package(OsqpEigen REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 
 set(THIS_PACKAGE_INCLUDE_DEPENDS
   rclcpp
@@ -33,6 +34,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   pluginlib
   fr3_dynamics
   orocos_kdl_vendor
+  diagnostic_msgs
 )
 
 add_library(b2_constraint_solver_plugin SHARED
