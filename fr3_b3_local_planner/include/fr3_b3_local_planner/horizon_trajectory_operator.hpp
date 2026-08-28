@@ -16,6 +16,7 @@
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
 #include <fr3_b3_local_planner/reshape_qp.hpp>
+#include <fr3_b3_local_planner/via_point_trajectory.hpp>
 
 namespace fr3_b3_local_planner
 {
@@ -77,6 +78,18 @@ private:
   double reshape_w_acc_{ 1.0 };
   double reshape_w_pos_{ 0.1 };
   double reshape_w_vel_{ 0.1 };
+
+  // Phase 3d, Level 3 (reroute): tried once retime AND reshape are both
+  // confirmed exhausted on the primary route. The alternate candidate is
+  // a via-point route sharing the primary's own q0/qf, with q_via =
+  // (q0+qf)/2 + via_point_offset_ -- an explicitly caller-configured
+  // candidate (paper/local_planner.py's own scope: "certificate-guided
+  // selection among caller-supplied candidates, not a general
+  // replanner"), NOT a searched-for or generated one. All-zero offsets
+  // (the default) means no candidate is configured, so Level 3 is a
+  // true no-op -- see via_point_trajectory.hpp.
+  Eigen::VectorXd via_point_offset_;
+  double via_t1_fraction_{ 0.5 };
 };
 
 }  // namespace fr3_b3_local_planner

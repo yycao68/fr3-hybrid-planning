@@ -40,6 +40,7 @@ add_library(horizon_trajectory_operator_plugin SHARED
   src/torque_margin_certificate.cpp
   src/route_retime_search.cpp
   src/reshape_qp.cpp
+  src/via_point_trajectory.cpp
 )
 target_include_directories(horizon_trajectory_operator_plugin PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

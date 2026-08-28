@@ -84,6 +84,22 @@ bool HorizonTrajectoryOperator::initialize(const rclcpp::Node::SharedPtr& node,
   }
   delta_tau_ = delta_tau_fraction * tau_max_;
 
+  // Phase 3d, Level 3: via_point_offset is NOT shared with
+  // B3ConstraintSolver (Level 3 is route-level only, like Level 1), so no
+  // has_parameter guard is needed here -- plain declare_parameter, same
+  // as tau_max's loop above. Stored in MoveIt group joint order (not KDL
+  // order) -- this is pure kinematics applied directly to q0/qf, which
+  // are themselves read via copyJointGroupPositions (MoveIt order), no
+  // dynamics computation involved.
+  const std::vector<std::string>& moveit_joint_names = joint_group_->getActiveJointModelNames();
+  via_point_offset_.resize(moveit_joint_names.size());
+  for (std::size_t i = 0; i < moveit_joint_names.size(); ++i)
+  {
+    const std::string param_name = "b3.via_point_offset." + moveit_joint_names[i];
+    via_point_offset_(static_cast<int>(i)) = node_->declare_parameter<double>(param_name, 0.0);
+  }
+  via_t1_fraction_ = node_->declare_parameter<double>("b3.via_t1_fraction", 0.5);
+
   reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(robot_model, group_name);
   current_duration_ = 0.0;
   return true;
@@ -96,78 +112,176 @@ HorizonTrajectoryOperator::addTrajectorySegment(const robot_trajectory::RobotTra
   reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(new_trajectory);
   time_parametrization_.computeTimeStamps(*reference_trajectory_);
 
-  // Phase 3b, Level 1: a route-level, once-per-segment decision (paper
-  // Sec. V-B / local_planner.py::plan_route's own design note -- retiming
-  // only the online horizon and not persisting the slower time law into
-  // subsequent cycles would not actually slow the executed motion down).
+  // Route-level, once-per-segment cascade (paper Sec. V-B /
+  // local_planner.py::plan_route's own ordering: retime -> reshape ->
+  // reroute, each tried only if the previous one didn't fix things).
+  // Retiming only the online horizon and not persisting the slower time
+  // law into subsequent cycles would not actually slow the executed
+  // motion down -- this is why the whole cascade lives here, once per
+  // route, not online.
   int binding_step = -1;
   const double m0 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reference_trajectory_, binding_step,
                                                 "whole-route");
-  if (m0 < m_safe_)
+  if (m0 >= m_safe_)
   {
-    const std::optional<double> lambda =
-        searchRetimeLambda(dynamics_, tau_max_, delta_tau_, m_safe_, lam_max_, *reference_trajectory_);
-    if (lambda.has_value())
-    {
-      robot_trajectory::RobotTrajectory retimed = retimeTrajectory(*reference_trajectory_, lambda.value());
-      int retimed_binding_step = -1;
-      const double m1 =
-          computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, retimed, retimed_binding_step, "whole-route");
-      reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(retimed);
-      RCLCPP_INFO(LOGGER, "B3: Level 1 (retime) applied: lambda=%.3f, whole-route margin %.3f -> %.3f",
-                  lambda.value(), m0, m1);
-    }
-    else
-    {
-      RCLCPP_INFO(LOGGER,
-                  "B3: Level 1 (retime) exhausted -- whole-route margin %.3f < m_safe=%.3f at no lambda in "
-                  "[1, %.3f]; trying Level 2 (reshape)",
-                  m0, m_safe_, lam_max_);
+    return moveit_msgs::action::LocalPlanner::Feedback();
+  }
 
-      // Level 2 (route-level reshape), tried only because retiming above
-      // failed (plan_route's ordering: retime, then reshape -- closes the
-      // gap retiming structurally can't: a deficit that's a function of
-      // POSITION, not speed, since B_i in the retime decomposition is
-      // lambda-independent). Pinned to reach the route's own original
-      // goal at rest, matching _search_reshape_whole_route's own
-      // terminal_q=traj.qf, terminal_qdot=0.
-      std::vector<double> qf_v;
-      const moveit::core::RobotState& last_state =
-          reference_trajectory_->getWayPoint(reference_trajectory_->getWayPointCount() - 1);
-      last_state.copyJointGroupPositions(joint_group_, qf_v);
-      Eigen::VectorXd terminal_q = Eigen::Map<Eigen::VectorXd>(qf_v.data(), qf_v.size());
-      Eigen::VectorXd terminal_qdot = Eigen::VectorXd::Zero(qf_v.size());
+  bool fixed_by_1_or_2 = false;
 
-      std::optional<robot_trajectory::RobotTrajectory> reshaped =
-          tryReshape(dynamics_, tau_max_, delta_tau_, qddot_box_, reshape_w_acc_, reshape_w_pos_, reshape_w_vel_,
-                     *reference_trajectory_, &terminal_q, &terminal_qdot);
-      if (reshaped.has_value())
+  // Level 1 (retime).
+  const std::optional<double> lambda =
+      searchRetimeLambda(dynamics_, tau_max_, delta_tau_, m_safe_, lam_max_, *reference_trajectory_);
+  if (lambda.has_value())
+  {
+    robot_trajectory::RobotTrajectory retimed = retimeTrajectory(*reference_trajectory_, lambda.value());
+    int retimed_binding_step = -1;
+    const double m1 =
+        computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, retimed, retimed_binding_step, "whole-route");
+    reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(retimed);
+    RCLCPP_INFO(LOGGER, "B3: Level 1 (retime) applied: lambda=%.3f, whole-route margin %.3f -> %.3f", lambda.value(),
+                m0, m1);
+    fixed_by_1_or_2 = true;
+  }
+  else
+  {
+    RCLCPP_INFO(LOGGER,
+                "B3: Level 1 (retime) exhausted -- whole-route margin %.3f < m_safe=%.3f at no lambda in "
+                "[1, %.3f]; trying Level 2 (reshape)",
+                m0, m_safe_, lam_max_);
+
+    // Level 2 (route-level reshape), tried only because retiming above
+    // failed (closes the gap retiming structurally can't: a deficit
+    // that's a function of POSITION, not speed). Pinned to reach the
+    // route's own original goal at rest, matching
+    // _search_reshape_whole_route's own terminal_q=traj.qf,
+    // terminal_qdot=0.
+    std::vector<double> qf_v;
+    const moveit::core::RobotState& last_state =
+        reference_trajectory_->getWayPoint(reference_trajectory_->getWayPointCount() - 1);
+    last_state.copyJointGroupPositions(joint_group_, qf_v);
+    Eigen::VectorXd terminal_q = Eigen::Map<Eigen::VectorXd>(qf_v.data(), qf_v.size());
+    Eigen::VectorXd terminal_qdot = Eigen::VectorXd::Zero(qf_v.size());
+
+    std::optional<robot_trajectory::RobotTrajectory> reshaped =
+        tryReshape(dynamics_, tau_max_, delta_tau_, qddot_box_, reshape_w_acc_, reshape_w_pos_, reshape_w_vel_,
+                   *reference_trajectory_, &terminal_q, &terminal_qdot);
+    if (reshaped.has_value())
+    {
+      int reshaped_binding_step = -1;
+      const double m2 =
+          computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reshaped, reshaped_binding_step,
+                                      "whole-route");
+      if (m2 >= m_safe_)
       {
-        int reshaped_binding_step = -1;
-        const double m2 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reshaped,
-                                                       reshaped_binding_step, "whole-route");
-        if (m2 >= m_safe_)
-        {
-          reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(*reshaped);
-          RCLCPP_INFO(LOGGER, "B3: Level 2 (reshape) applied: whole-route margin %.3f -> %.3f", m0, m2);
-        }
-        else
-        {
-          RCLCPP_INFO(LOGGER,
-                      "B3: Level 2 (reshape) solved but margin %.3f still < m_safe=%.3f; Level 1/2 both "
-                      "exhausted, keeping nominal route for online Level 0/2/4 to cope",
-                      m2, m_safe_);
-        }
+        reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(*reshaped);
+        RCLCPP_INFO(LOGGER, "B3: Level 2 (reshape) applied: whole-route margin %.3f -> %.3f", m0, m2);
+        fixed_by_1_or_2 = true;
       }
       else
       {
-        RCLCPP_INFO(LOGGER,
-                    "B3: Level 2 (reshape) failed to solve; Level 1/2 both exhausted, keeping nominal route "
-                    "for online Level 0/2/4 to cope");
+        RCLCPP_INFO(LOGGER, "B3: Level 2 (reshape) solved but margin %.3f still < m_safe=%.3f", m2, m_safe_);
       }
+    }
+    else
+    {
+      RCLCPP_INFO(LOGGER, "B3: Level 2 (reshape) failed to solve");
     }
   }
 
+  if (fixed_by_1_or_2)
+  {
+    return moveit_msgs::action::LocalPlanner::Feedback();
+  }
+
+  // Level 3 (reroute), Phase 3d: tried only because retime AND reshape
+  // both failed on the primary route. The candidate is a via-point route
+  // (buildViaPointTrajectory) sharing the primary's own q0/qf --
+  // caller-CONFIGURED via b3.via_point_offset.*, not searched for or
+  // generated (paper/local_planner.py's own scope: "certificate-guided
+  // selection among caller-supplied candidates, not a general
+  // replanner"). All-zero offsets (the default) means no candidate is
+  // configured, so Level 3 is a true no-op.
+  if ((via_point_offset_.array() == 0.0).all())
+  {
+    RCLCPP_INFO(LOGGER,
+                "B3: Level 1/2 both exhausted; no via-point candidate configured (all "
+                "b3.via_point_offset.* are 0) -- skipping Level 3, keeping nominal route for "
+                "online Level 0/2/4 to cope");
+    return moveit_msgs::action::LocalPlanner::Feedback();
+  }
+
+  std::vector<double> q0_v, qf_v;
+  reference_trajectory_->getWayPoint(0).copyJointGroupPositions(joint_group_, q0_v);
+  reference_trajectory_->getWayPoint(reference_trajectory_->getWayPointCount() - 1)
+      .copyJointGroupPositions(joint_group_, qf_v);
+  const Eigen::VectorXd q0 = Eigen::Map<Eigen::VectorXd>(q0_v.data(), q0_v.size());
+  const Eigen::VectorXd qf = Eigen::Map<Eigen::VectorXd>(qf_v.data(), qf_v.size());
+  const Eigen::VectorXd q_via = 0.5 * (q0 + qf) + via_point_offset_;
+  const double T = reference_trajectory_->getDuration();
+  const double T1 = via_t1_fraction_ * T;
+  const double T2 = T - T1;
+
+  robot_trajectory::RobotTrajectory alt = buildViaPointTrajectory(
+      reference_trajectory_->getRobotModel(), group_, joint_group_, q0, q_via, qf, T1, T2, dt_);
+
+  int alt_binding_step = -1;
+  const double mb = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, alt, alt_binding_step,
+                                                "whole-route");
+  RCLCPP_INFO(LOGGER, "B3: Level 3 (reroute) candidate whole-route margin (sub-level 0, vs. primary's %.3f): %.3f",
+              m0, mb);
+  if (mb >= m_safe_)
+  {
+    reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(alt);
+    RCLCPP_INFO(LOGGER, "B3: Level 3 (reroute) applied at sub-level 0 (via-point route already clears): margin %.3f",
+                mb);
+    return moveit_msgs::action::LocalPlanner::Feedback();
+  }
+
+  const std::optional<double> lambda_b = searchRetimeLambda(dynamics_, tau_max_, delta_tau_, m_safe_, lam_max_, alt);
+  if (!lambda_b.has_value())
+  {
+    RCLCPP_INFO(LOGGER, "B3: Level 3 (reroute) sub-level 1 (retime) exhausted on candidate; trying sub-level 2");
+  }
+  if (lambda_b.has_value())
+  {
+    robot_trajectory::RobotTrajectory alt_retimed = retimeTrajectory(alt, lambda_b.value());
+    int b1 = -1;
+    const double mb1 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, alt_retimed, b1, "whole-route");
+    reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(alt_retimed);
+    RCLCPP_INFO(LOGGER,
+                "B3: Level 3 (reroute) applied at sub-level 1 (retimed via-point route): lambda=%.3f, "
+                "margin %.3f -> %.3f",
+                lambda_b.value(), mb, mb1);
+    return moveit_msgs::action::LocalPlanner::Feedback();
+  }
+
+  Eigen::VectorXd alt_terminal_q = qf;
+  Eigen::VectorXd alt_terminal_qdot = Eigen::VectorXd::Zero(qf.size());
+  std::optional<robot_trajectory::RobotTrajectory> alt_reshaped =
+      tryReshape(dynamics_, tau_max_, delta_tau_, qddot_box_, reshape_w_acc_, reshape_w_pos_, reshape_w_vel_, alt,
+                 &alt_terminal_q, &alt_terminal_qdot);
+  if (alt_reshaped.has_value())
+  {
+    int b2 = -1;
+    const double mb2 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *alt_reshaped, b2, "whole-route");
+    if (mb2 >= m_safe_)
+    {
+      reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(*alt_reshaped);
+      RCLCPP_INFO(LOGGER,
+                  "B3: Level 3 (reroute) applied at sub-level 2 (reshaped via-point route): margin %.3f -> %.3f",
+                  mb, mb2);
+      return moveit_msgs::action::LocalPlanner::Feedback();
+    }
+    RCLCPP_INFO(LOGGER, "B3: Level 3 (reroute) sub-level 2 solved but margin %.3f still < m_safe=%.3f", mb2,
+                m_safe_);
+  }
+  else
+  {
+    RCLCPP_INFO(LOGGER, "B3: Level 3 (reroute) sub-level 2 (reshape) failed to solve");
+  }
+
+  RCLCPP_INFO(LOGGER, "B3: Level 1/2/3 all exhausted; keeping nominal route for online Level 0/2/4 to cope");
   return moveit_msgs::action::LocalPlanner::Feedback();
 }
 
