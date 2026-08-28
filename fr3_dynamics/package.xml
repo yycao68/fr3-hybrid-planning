@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>fr3_dynamics</name>
+  <version>0.1.0</version>
+  <description>
+    Shared KDL-based FR3 inverse-dynamics wrapper (chain construction,
+    mass/Coriolis/gravity via KDL::ChainDynParam, KDL-to-MoveIt joint index
+    mapping), used identically by both the B2 and B3 Hybrid Planning local
+    planner plugins so torque is computed via one code path, not two.
+  </description>
+  <maintainer email="dev@example.com">replan</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>moveit_core</depend>
+  <depend>kdl_parser</depend>
+  <depend>orocos_kdl_vendor</depend>
+  <depend>urdf</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

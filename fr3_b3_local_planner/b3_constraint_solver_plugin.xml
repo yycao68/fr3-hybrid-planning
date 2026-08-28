@@ -1,0 +1,9 @@
+<library path="b3_constraint_solver_plugin">
+  <class name="fr3_b3_local_planner/B3ConstraintSolver" type="fr3_b3_local_planner::B3ConstraintSolver" base_class_type="moveit::hybrid_planning::LocalConstraintSolverInterface">
+    <description>
+    B3: predictive physical-realizability certificate (horizon-wide,
+    uncertainty-tightened torque margin) plus Level 0 (pass through) and
+    Level 4 (sticky brake). Level 1/2/3 are deferred to a later phase.
+    </description>
+  </class>
+</library>

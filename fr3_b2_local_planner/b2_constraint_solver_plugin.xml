@@ -1,0 +1,10 @@
+<library path="b2_constraint_solver_plugin">
+  <class name="fr3_b2_local_planner/B2ConstraintSolver" type="fr3_b2_local_planner::B2ConstraintSolver" base_class_type="moveit::hybrid_planning::LocalConstraintSolverInterface">
+    <description>
+    B2: reactive, current-state-only torque handling. Projects the nominal
+    acceleration onto the torque-feasible set (KDL inverse dynamics + OSQP)
+    against real FR3 torque limits whenever the nominal command would
+    exceed them; passes the nominal through unmodified otherwise.
+    </description>
+  </class>
+</library>

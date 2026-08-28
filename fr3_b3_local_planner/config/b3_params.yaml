@@ -1,0 +1,24 @@
+# Real FR3 per-joint effort limits (franka_description/robots/fr3/
+# joint_limits.yaml, same source as B2's config) plus certificate.py's own
+# defaults for delta_tau_fraction (5% of tau_max) and m_safe (2.0 N*m --
+# calibrated on the reduced-order 3-DOF arm, flagged in the Phase 3a plan
+# as needing an FR3-scale sanity check, not assumed valid here).
+# qddot_box matches local_planner.py::PlannerConfig's own default (8.0
+# rad/s^2). horizon_steps/dt match local_planner.py::PlannerConfig's
+# defaults (15 steps @ 0.02s = 0.3s lookahead).
+b3:
+  root_link: "fr3_link0"
+  tip_link: "fr3_link8"
+  dt: 0.02
+  horizon_steps: 15
+  m_safe: 2.0
+  qddot_box: 8.0
+  delta_tau_fraction: 0.05
+  tau_max:
+    fr3_joint1: 87.0
+    fr3_joint2: 87.0
+    fr3_joint3: 87.0
+    fr3_joint4: 87.0
+    fr3_joint5: 12.0
+    fr3_joint6: 12.0
+    fr3_joint7: 12.0

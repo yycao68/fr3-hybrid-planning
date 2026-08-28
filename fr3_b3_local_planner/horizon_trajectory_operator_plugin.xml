@@ -1,0 +1,10 @@
+<library path="horizon_trajectory_operator_plugin">
+  <class name="fr3_b3_local_planner/HorizonTrajectoryOperator" type="fr3_b3_local_planner::HorizonTrajectoryOperator" base_class_type="moveit::hybrid_planning::TrajectoryOperatorInterface">
+    <description>
+    B3's trajectory operator: exposes horizon_steps future waypoints from
+    the buffered reference trajectory (not just the next one, like
+    SimpleSampler), so B3ConstraintSolver can evaluate the predictive
+    realizability certificate over a genuine receding horizon.
+    </description>
+  </class>
+</library>

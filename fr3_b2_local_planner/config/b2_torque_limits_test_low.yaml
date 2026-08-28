@@ -1,0 +1,19 @@
+# TEST-ONLY, artificially low torque limits -- NOT a claim about real FR3
+# physics (see b2_torque_limits.yaml for the real values). MoveIt's own
+# OMPL+TOTG planning already stays within the real 87/12 N-m limits by
+# construction, so a normal nominal trajectory won't naturally exceed
+# them; this file exists solely to exercise B2's intervention branch
+# (Phase 2 step 5 verification: confirm B2 visibly differs between
+# within-limits and over-limit cases, not just that the plugin loads).
+b2:
+  root_link: "fr3_link0"
+  tip_link: "fr3_link8"
+  control_period: 0.01
+  tau_max:
+    fr3_joint1: 0.5
+    fr3_joint2: 0.5
+    fr3_joint3: 0.5
+    fr3_joint4: 0.5
+    fr3_joint5: 0.5
+    fr3_joint6: 0.5
+    fr3_joint7: 0.5

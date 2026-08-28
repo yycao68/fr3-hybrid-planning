@@ -1,0 +1,17 @@
+# Real FR3 per-joint effort limits, from
+# franka_description/robots/fr3/joint_limits.yaml (the same source used
+# throughout this port -- not fabricated). Loaded into local_planner_component's
+# node namespace, read by B2ConstraintSolver::initialize() as
+# "b2.tau_max.<joint_name>".
+b2:
+  root_link: "fr3_link0"
+  tip_link: "fr3_link8"
+  control_period: 0.01  # seconds; matches local_planner.yaml's local_planning_frequency: 100.0
+  tau_max:
+    fr3_joint1: 87.0
+    fr3_joint2: 87.0
+    fr3_joint3: 87.0
+    fr3_joint4: 87.0
+    fr3_joint5: 12.0
+    fr3_joint6: 12.0
+    fr3_joint7: 12.0

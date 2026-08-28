@@ -1,0 +1,48 @@
+# ros2_control controller_manager config for the MuJoCo-backed FR3.
+#
+# command_interfaces: [effort] + these PID gains are copied verbatim from
+# franka_ros2's own franka_fr3_moveit_config/config/fr3_ros_controllers.yaml
+# (the REAL robot's config, effort/torque control at libfranka's native
+# rate). Deliberately reused rather than re-tuned: mujoco_system.cpp's
+# write() clamps the resulting effort command to joint_limits.max_effort
+# sourced from the URDF (this package's real FR3 87/12 N-m limits), so this
+# is the one command-interface choice that actually respects real torque
+# limits during MuJoCo execution -- see urdf/fr3_mujoco.urdf.xacro for why
+# `position` (with mj_data->ctrl never touched by this plugin) does not.
+# franka_robot_state_broadcaster is dropped (needs franka_hardware's
+# Franka-specific robot-state type, which we don't have with MuJoCo).
+/**:
+  controller_manager:
+    ros__parameters:
+      update_rate: 500  # Hz
+
+      fr3_arm_controller:
+        type: joint_trajectory_controller/JointTrajectoryController
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+/**:
+  fr3_arm_controller:
+    ros__parameters:
+      command_interfaces:
+        - effort
+      state_interfaces:
+        - position
+        - velocity
+      joints:
+        - fr3_joint1
+        - fr3_joint2
+        - fr3_joint3
+        - fr3_joint4
+        - fr3_joint5
+        - fr3_joint6
+        - fr3_joint7
+      gains:
+        fr3_joint1: { p: 600., d: 30., i: 0., i_clamp: 1. }
+        fr3_joint2: { p: 600., d: 30., i: 0., i_clamp: 1. }
+        fr3_joint3: { p: 600., d: 30., i: 0., i_clamp: 1. }
+        fr3_joint4: { p: 600., d: 30., i: 0., i_clamp: 1. }
+        fr3_joint5: { p: 250., d: 10., i: 0., i_clamp: 1. }
+        fr3_joint6: { p: 150., d: 10., i: 0., i_clamp: 1. }
+        fr3_joint7: { p: 50., d: 5., i: 0., i_clamp: 1. }

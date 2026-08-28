@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>fr3_b2_local_planner</name>
+  <version>0.1.0</version>
+  <description>
+    Phase 2: B2 -- reactive, current-state-only torque handling (paper
+    Sec. VIII-A) as a real MoveIt 2 Hybrid Planning LocalConstraintSolverInterface
+    plugin, using the shared fr3_dynamics package for inverse dynamics and
+    OSQP for the one-step torque-feasible-qddot projection, against real
+    FR3 torque limits.
+  </description>
+  <maintainer email="dev@example.com">replan</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>moveit_hybrid_planning</depend>
+  <depend>moveit_core</depend>
+  <depend>moveit_ros_planning</depend>
+  <depend>pluginlib</depend>
+  <depend>fr3_dynamics</depend>
+  <depend>orocos_kdl_vendor</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+    <moveit_hybrid_planning plugin="${prefix}/b2_constraint_solver_plugin.xml"/>
+  </export>
+</package>

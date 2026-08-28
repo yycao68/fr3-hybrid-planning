@@ -1,0 +1,13 @@
+# Third-party clones with their own independent git history/remotes --
+# not tracked here (each is committed separately in its own repo).
+franka_description/
+moveit_hybrid_planning/
+mujoco_menagerie_sparse/
+mujoco_ros2_control/
+
+# Vendored MuJoCo Menagerie FR3 asset dump (meshes/textures/LICENSE/README
+# copied in verbatim, not authored here) -- large binary third-party
+# content, same reasoning as the excludes above.
+fr3_mujoco_bringup/mujoco_models/
+
+.DS_Store

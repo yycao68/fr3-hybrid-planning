@@ -1,0 +1,72 @@
+// B3's certificate + predictive Level 0/4 (paper Sec. IV certificate.py +
+// Sec. V-B local_planner.py, this pass's scope: Level 0 and Level 4 only --
+// see the Phase 3a plan for why Level 1/2/3 are deferred).
+//
+// Ports certificate.py::m_phys (horizon-wide, uncertainty-tightened torque
+// margin) and local_planner.py::_brake_profile (Level 4, sticky) into a
+// real LocalConstraintSolverInterface plugin, using the shared fr3_dynamics
+// package -- the exact same dynamics computation B2 uses, so B2-vs-B3 is a
+// fair comparison of reactive-vs-predictive local planning, not two
+// independently-computed torque models (paper Sec. VIII-A).
+//
+// Unlike B2 (which only ever sees local_trajectory's single next waypoint),
+// B3 pairs with HorizonTrajectoryOperator, which populates local_trajectory
+// with `horizon_steps` future waypoints -- this is what lets B3 evaluate
+// m_phys over a genuine receding horizon and catch a violation *before* the
+// current instant, not just react once it's already happened.
+#pragma once
+
+#include <string>
+#include <vector>
+
+#include <rclcpp/rclcpp.hpp>
+#include <moveit/local_planner/local_constraint_solver_interface.h>
+
+#include <fr3_dynamics/franka_chain_dynamics.hpp>
+
+namespace fr3_b3_local_planner
+{
+
+class B3ConstraintSolver : public moveit::hybrid_planning::LocalConstraintSolverInterface
+{
+public:
+  B3ConstraintSolver() = default;
+  ~B3ConstraintSolver() override = default;
+
+  bool initialize(const rclcpp::Node::SharedPtr& node,
+                   const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor,
+                   const std::string& group_name) override;
+  bool reset() override;
+
+  moveit_msgs::action::LocalPlanner::Feedback
+  solve(const robot_trajectory::RobotTrajectory& local_trajectory,
+        const std::shared_ptr<const moveit_msgs::action::LocalPlanner::Goal> local_goal,
+        trajectory_msgs::msg::JointTrajectory& local_solution) override;
+
+private:
+  // certificate.py::m_phys over the horizon window: returns the minimum
+  // robust margin across all horizon steps and joints, and (via the two
+  // out-params) which step/joint was binding -- used only for logging/
+  // verification, not the trigger decision itself.
+  double computeMPhys(const robot_trajectory::RobotTrajectory& horizon, int& binding_step) const;
+
+  rclcpp::Node::SharedPtr node_;
+  planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
+  std::string group_name_;
+
+  fr3_dynamics::FrankaChainDynamics dynamics_;
+
+  Eigen::VectorXd tau_max_;    // real FR3 per-joint effort limits (N*m)
+  Eigen::VectorXd delta_tau_;  // uncertainty bound, delta_tau_fraction * tau_max_ (certificate.py default: 5%)
+  double m_safe_{ 2.0 };       // N*m; paper's own default, flagged for FR3-scale sanity-check (see plan)
+  double qddot_box_{ 8.0 };    // rad/s^2, brake-profile deceleration bound (local_planner.py::PlannerConfig default)
+  double control_period_{ 0.02 };  // seconds; matches b3.dt (HorizonTrajectoryOperator)
+
+  // Level 4 is STICKY (code/baselines.py::policy_b3): once triggered, every
+  // subsequent solve() call holds at whatever position the robot actually
+  // reached, ignoring the nominal horizon entirely, rather than
+  // re-evaluating the certificate every cycle.
+  bool braked_{ false };
+};
+
+}  // namespace fr3_b3_local_planner

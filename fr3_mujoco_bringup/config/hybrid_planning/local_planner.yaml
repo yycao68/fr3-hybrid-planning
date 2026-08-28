@@ -1,0 +1,24 @@
+# Stock plugins (ForwardTrajectory + SimpleSampler) for the Phase 2 smoke
+# test -- proves the plugin-loading/action pipeline works against real FR3
+# kinematics + mujoco_ros2_control before any B2-specific code exists.
+# local_solution_topic targets fr3_arm_controller's raw JointTrajectory
+# topic (JTC accepts this alongside its action interface), the same
+# effort-interface controller fr3_mujoco_bringup already uses -- the
+# position/velocity fields ForwardTrajectory populates are exactly what
+# that controller's internal PID (config/fr3_ros_controllers.yaml) tracks.
+robot_description: "robot_description"
+trajectory_operator_plugin_name: "moveit_hybrid_planning/SimpleSampler"
+local_constraint_solver_plugin_name: "moveit_hybrid_planning/ForwardTrajectory"
+local_planning_frequency: 100.0
+global_solution_topic: "global_trajectory"
+local_solution_topic: "/fr3_arm_controller/joint_trajectory"
+local_solution_topic_type: "trajectory_msgs/JointTrajectory"
+publish_joint_positions: true
+publish_joint_velocities: false
+group_name: "fr3_arm"
+monitored_planning_scene: "/planning_scene"
+collision_object_topic: "/collision_object"
+joint_states_topic: "/joint_states"
+
+# ForwardTrajectory param
+stop_before_collision: true

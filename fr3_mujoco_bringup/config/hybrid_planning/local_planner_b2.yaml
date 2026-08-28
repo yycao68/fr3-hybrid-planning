@@ -1,0 +1,18 @@
+# Same as local_planner.yaml but with B2's own LocalConstraintSolverInterface
+# plugin in place of the stock ForwardTrajectory. B2 has no analog of
+# ForwardTrajectory's collision-stop or stuck-detection heuristics (see
+# fr3_b2_local_planner/src/b2_constraint_solver.cpp) -- it only ever
+# intervenes on a real torque-limit violation.
+robot_description: "robot_description"
+trajectory_operator_plugin_name: "moveit_hybrid_planning/SimpleSampler"
+local_constraint_solver_plugin_name: "fr3_b2_local_planner/B2ConstraintSolver"
+local_planning_frequency: 100.0
+global_solution_topic: "global_trajectory"
+local_solution_topic: "/fr3_arm_controller/joint_trajectory"
+local_solution_topic_type: "trajectory_msgs/JointTrajectory"
+publish_joint_positions: true
+publish_joint_velocities: true
+group_name: "fr3_arm"
+monitored_planning_scene: "/planning_scene"
+collision_object_topic: "/collision_object"
+joint_states_topic: "/joint_states"

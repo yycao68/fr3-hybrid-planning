@@ -1,0 +1,20 @@
+# moveit_simple_controller_manager mapping: tells move_group which
+# FollowJointTrajectory action to send planned trajectories to for
+# execution. Adapted from franka_ros2's franka_fr3_moveit_config
+# fr3_controllers.yaml with the franka_gripper entry dropped (no gripper in
+# Phase 1).
+controller_names:
+  - fr3_arm_controller
+
+fr3_arm_controller:
+  action_ns: follow_joint_trajectory
+  type: FollowJointTrajectory
+  default: true
+  joints:
+    - fr3_joint1
+    - fr3_joint2
+    - fr3_joint3
+    - fr3_joint4
+    - fr3_joint5
+    - fr3_joint6
+    - fr3_joint7

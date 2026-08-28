@@ -1,0 +1,16 @@
+# Same as local_planner_b2.yaml but with B3's own TrajectoryOperator
+# (horizon-exposing, not single-waypoint) and LocalConstraintSolver
+# (predictive certificate + Level 0/4) in place of B2's.
+robot_description: "robot_description"
+trajectory_operator_plugin_name: "fr3_b3_local_planner/HorizonTrajectoryOperator"
+local_constraint_solver_plugin_name: "fr3_b3_local_planner/B3ConstraintSolver"
+local_planning_frequency: 50.0
+global_solution_topic: "global_trajectory"
+local_solution_topic: "/fr3_arm_controller/joint_trajectory"
+local_solution_topic_type: "trajectory_msgs/JointTrajectory"
+publish_joint_positions: true
+publish_joint_velocities: true
+group_name: "fr3_arm"
+monitored_planning_scene: "/planning_scene"
+collision_object_topic: "/collision_object"
+joint_states_topic: "/joint_states"
