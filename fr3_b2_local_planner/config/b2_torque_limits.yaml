@@ -5,7 +5,7 @@
 # "b2.tau_max.<joint_name>".
 b2:
   root_link: "fr3_link0"
-  tip_link: "fr3_link8"
+  tip_link: "payload"  # Phase 4b: payload_joint (fixed) child of fr3_link8, see fr3_mujoco.urdf.xacro
   control_period: 0.01  # seconds; matches local_planner.yaml's local_planning_frequency: 100.0
   tau_max:
     fr3_joint1: 87.0

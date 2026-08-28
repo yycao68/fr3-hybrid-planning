@@ -7,7 +7,7 @@
 # within-limits and over-limit cases, not just that the plugin loads).
 b2:
   root_link: "fr3_link0"
-  tip_link: "fr3_link8"
+  tip_link: "payload"  # Phase 4b: payload_joint (fixed) child of fr3_link8, see fr3_mujoco.urdf.xacro
   control_period: 0.01
   tau_max:
     fr3_joint1: 0.5

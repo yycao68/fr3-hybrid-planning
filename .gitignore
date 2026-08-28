@@ -11,3 +11,4 @@ mujoco_ros2_control/
 fr3_mujoco_bringup/mujoco_models/
 
 .DS_Store
+__pycache__/

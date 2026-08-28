@@ -30,6 +30,37 @@
 
   <xacro:include filename="$(find franka_description)/robots/fr3/fr3.urdf.xacro"/>
 
+  <!-- Phase 4b: end-effector payload. fr3_link8 (franka_description's own
+       virtual flange link, franka_robot.xacro) is at the SAME physical
+       offset MuJoCo's own attachment_site uses on fr3_link7 (both come
+       from Franka's own kinematics spec); attaching here with a zero
+       origin keeps both models' payload at the identical point.
+
+       This link's mass must genuinely be part of fr3_dynamics's own KDL
+       chain (root_link to tip_link) for B2/B3's certificate to see it at
+       all; adding the MJCF body alone (as an earlier pass in this phase
+       did) changes only the SIMULATED physics, not what the certificate
+       itself computes, since fr3_dynamics parses THIS URDF via
+       kdl_parser, entirely independently of the MJCF. b2.tip_link and
+       b3.tip_link must be set to "payload" (not "fr3_link8") for this
+       link's mass to actually enter the chain; see the b2/b3 config
+       YAMLs. 1e-6 kg is the same numerically-safe near-zero default
+       fr3.xml's own payload body and the Python reference's
+       Arm.set_payload_mass use, not a real physical claim. -->
+  <xacro:arg name="payload_mass" default="1e-6"/>
+  <link name="payload">
+    <inertial>
+      <mass value="$(arg payload_mass)"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-8" iyy="1e-8" izz="1e-8" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+  <joint name="payload_joint" type="fixed">
+    <parent link="fr3_link8"/>
+    <child link="payload"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
   <ros2_control name="MujocoSystem" type="system">
     <hardware>
       <plugin>mujoco_ros2_control/MujocoSystem</plugin>

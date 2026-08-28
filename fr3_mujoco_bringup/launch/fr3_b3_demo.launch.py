@@ -32,9 +32,16 @@ def generate_launch_description():
     bringup_share = get_package_share_directory('fr3_mujoco_bringup')
     franka_description_share = get_package_share_directory('franka_description')
 
+    # Phase 4b: end-effector payload mass (kg), read once here and used for
+    # BOTH the URDF (so fr3_dynamics/the certificate sees it) and the MJCF
+    # (so MuJoCo's own simulated physics carries it) -- see
+    # fr3_mujoco.urdf.xacro's own comment for why both are needed.
+    payload_mass_str = os.environ.get('FR3_PAYLOAD_MASS_KG', '0.0')
+
     xacro_file = os.path.join(bringup_share, 'urdf', 'fr3_mujoco.urdf.xacro')
     robot_description_config = Command(
-        [FindExecutable(name='xacro'), ' ', xacro_file, ' hand:=false'])
+        [FindExecutable(name='xacro'), ' ', xacro_file, ' hand:=false',
+         ' payload_mass:=', payload_mass_str])
     robot_description = {
         'robot_description': ParameterValue(robot_description_config, value_type=str)
     }
@@ -156,6 +163,7 @@ def generate_launch_description():
             robot_description,
             controller_config_file,
             {'mujoco_model_path': mujoco_model_path},
+            {'payload_mass_kg': float(payload_mass_str)},
         ],
     )
 

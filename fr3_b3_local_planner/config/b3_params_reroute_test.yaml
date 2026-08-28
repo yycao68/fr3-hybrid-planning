@@ -22,7 +22,7 @@
 # crash, no silent wrong answer, ever.
 b3:
   root_link: "fr3_link0"
-  tip_link: "fr3_link8"
+  tip_link: "payload"  # Phase 4b: payload_joint (fixed) child of fr3_link8, see fr3_mujoco.urdf.xacro
   dt: 0.02
   horizon_steps: 15
   m_safe: 0.01
