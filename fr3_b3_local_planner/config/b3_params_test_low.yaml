@@ -12,6 +12,7 @@ b3:
   m_safe: 0.3
   qddot_box: 8.0
   delta_tau_fraction: 0.05
+  lam_max: 4.0
   tau_max:
     fr3_joint1: 1.0
     fr3_joint2: 1.0

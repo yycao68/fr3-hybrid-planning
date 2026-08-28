@@ -23,6 +23,7 @@
 #include <moveit/local_planner/local_constraint_solver_interface.h>
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
+#include <fr3_b3_local_planner/torque_margin_certificate.hpp>
 
 namespace fr3_b3_local_planner
 {
@@ -44,12 +45,6 @@ public:
         trajectory_msgs::msg::JointTrajectory& local_solution) override;
 
 private:
-  // certificate.py::m_phys over the horizon window: returns the minimum
-  // robust margin across all horizon steps and joints, and (via the two
-  // out-params) which step/joint was binding -- used only for logging/
-  // verification, not the trigger decision itself.
-  double computeMPhys(const robot_trajectory::RobotTrajectory& horizon, int& binding_step) const;
-
   rclcpp::Node::SharedPtr node_;
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
   std::string group_name_;

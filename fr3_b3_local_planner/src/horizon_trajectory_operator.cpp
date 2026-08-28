@@ -1,6 +1,10 @@
 #include <fr3_b3_local_planner/horizon_trajectory_operator.hpp>
 
 #include <algorithm>
+#include <optional>
+
+#include <fr3_b3_local_planner/route_retime_search.hpp>
+#include <fr3_b3_local_planner/torque_margin_certificate.hpp>
 
 namespace
 {
@@ -27,10 +31,48 @@ bool HorizonTrajectoryOperator::initialize(const rclcpp::Node::SharedPtr& node,
     return false;
   }
   horizon_steps_ = node_->declare_parameter<int>("b3.horizon_steps", 15);
-  // b3.dt is shared with B3ConstraintSolver, whichever plugin initializes
-  // first into this node declares it; the other just reads it back.
+  // The following params are shared with B3ConstraintSolver, loaded into
+  // the SAME node -- whichever plugin initializes first declares them, the
+  // other just reads them back (same has_parameter guard pattern as b3.dt,
+  // Phase 3a).
   dt_ = node_->has_parameter("b3.dt") ? node_->get_parameter("b3.dt").as_double()
                                        : node_->declare_parameter<double>("b3.dt", 0.02);
+  const std::string root_link = node_->has_parameter("b3.root_link")
+                                     ? node_->get_parameter("b3.root_link").as_string()
+                                     : node_->declare_parameter<std::string>("b3.root_link", "fr3_link0");
+  const std::string tip_link = node_->has_parameter("b3.tip_link")
+                                    ? node_->get_parameter("b3.tip_link").as_string()
+                                    : node_->declare_parameter<std::string>("b3.tip_link", "fr3_link8");
+  m_safe_ = node_->has_parameter("b3.m_safe") ? node_->get_parameter("b3.m_safe").as_double()
+                                               : node_->declare_parameter<double>("b3.m_safe", 2.0);
+  const double delta_tau_fraction = node_->has_parameter("b3.delta_tau_fraction")
+                                         ? node_->get_parameter("b3.delta_tau_fraction").as_double()
+                                         : node_->declare_parameter<double>("b3.delta_tau_fraction", 0.05);
+  lam_max_ = node_->has_parameter("b3.lam_max") ? node_->get_parameter("b3.lam_max").as_double()
+                                                 : node_->declare_parameter<double>("b3.lam_max", 4.0);
+
+  if (!dynamics_.initialize(node_, robot_model, group_name, root_link, tip_link))
+  {
+    RCLCPP_ERROR(LOGGER, "HorizonTrajectoryOperator: fr3_dynamics initialization failed");
+    return false;
+  }
+  const unsigned int num_joints = dynamics_.numJoints();
+  tau_max_.resize(num_joints);
+  for (unsigned int i = 0; i < num_joints; ++i)
+  {
+    const std::string& joint_name = dynamics_.jointNames()[i];
+    const std::string param_name = "b3.tau_max." + joint_name;
+    tau_max_(i) = node_->has_parameter(param_name) ? node_->get_parameter(param_name).as_double()
+                                                    : node_->declare_parameter<double>(param_name, 0.0);
+    if (tau_max_(i) <= 0.0)
+    {
+      RCLCPP_ERROR(LOGGER, "HorizonTrajectoryOperator: missing/invalid tau_max for joint '%s' (param '%s')",
+                   joint_name.c_str(), param_name.c_str());
+      return false;
+    }
+  }
+  delta_tau_ = delta_tau_fraction * tau_max_;
+
   reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(robot_model, group_name);
   current_duration_ = 0.0;
   return true;
@@ -42,6 +84,37 @@ HorizonTrajectoryOperator::addTrajectorySegment(const robot_trajectory::RobotTra
   reset();
   reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(new_trajectory);
   time_parametrization_.computeTimeStamps(*reference_trajectory_);
+
+  // Phase 3b, Level 1: a route-level, once-per-segment decision (paper
+  // Sec. V-B / local_planner.py::plan_route's own design note -- retiming
+  // only the online horizon and not persisting the slower time law into
+  // subsequent cycles would not actually slow the executed motion down).
+  int binding_step = -1;
+  const double m0 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reference_trajectory_, binding_step,
+                                                "whole-route");
+  if (m0 < m_safe_)
+  {
+    const std::optional<double> lambda =
+        searchRetimeLambda(dynamics_, tau_max_, delta_tau_, m_safe_, lam_max_, *reference_trajectory_);
+    if (lambda.has_value())
+    {
+      robot_trajectory::RobotTrajectory retimed = retimeTrajectory(*reference_trajectory_, lambda.value());
+      int retimed_binding_step = -1;
+      const double m1 =
+          computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, retimed, retimed_binding_step, "whole-route");
+      reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(retimed);
+      RCLCPP_INFO(LOGGER, "B3: Level 1 (retime) applied: lambda=%.3f, whole-route margin %.3f -> %.3f",
+                  lambda.value(), m0, m1);
+    }
+    else
+    {
+      RCLCPP_INFO(LOGGER,
+                  "B3: Level 1 (retime) exhausted -- whole-route margin %.3f < m_safe=%.3f at no lambda in "
+                  "[1, %.3f]; keeping nominal route for online Level 0/4 to cope",
+                  m0, m_safe_, lam_max_);
+    }
+  }
+
   return moveit_msgs::action::LocalPlanner::Feedback();
 }
 

@@ -1,8 +1,7 @@
 #include <fr3_b3_local_planner/b3_constraint_solver.hpp>
 
+#include <algorithm>
 #include <cmath>
-#include <cstdlib>
-#include <limits>
 
 #include <moveit/local_planner/feedback_types.h>
 #include <moveit/planning_scene/planning_scene.h>
@@ -24,16 +23,26 @@ bool B3ConstraintSolver::initialize(const rclcpp::Node::SharedPtr& node,
   planning_scene_monitor_ = planning_scene_monitor;
   group_name_ = group_name;
 
-  const std::string root_link = node_->declare_parameter<std::string>("b3.root_link", "fr3_link0");
-  const std::string tip_link = node_->declare_parameter<std::string>("b3.tip_link", "fr3_link8");
-  // b3.dt is shared with HorizonTrajectoryOperator, which is initialized
-  // into the same node first and already declares it -- avoid a duplicate
-  // rclcpp::exceptions::ParameterAlreadyDeclaredException.
+  // These params are shared with HorizonTrajectoryOperator, which as of
+  // Phase 3b (route-level retiming) also needs dynamics/certificate
+  // params and is initialized into the same node first -- has_parameter
+  // guards on both sides avoid a duplicate
+  // rclcpp::exceptions::ParameterAlreadyDeclaredException (same pattern
+  // already used for b3.dt since Phase 3a).
+  const std::string root_link = node_->has_parameter("b3.root_link")
+                                     ? node_->get_parameter("b3.root_link").as_string()
+                                     : node_->declare_parameter<std::string>("b3.root_link", "fr3_link0");
+  const std::string tip_link = node_->has_parameter("b3.tip_link")
+                                    ? node_->get_parameter("b3.tip_link").as_string()
+                                    : node_->declare_parameter<std::string>("b3.tip_link", "fr3_link8");
   control_period_ = node_->has_parameter("b3.dt") ? node_->get_parameter("b3.dt").as_double()
                                                    : node_->declare_parameter<double>("b3.dt", 0.02);
-  m_safe_ = node_->declare_parameter<double>("b3.m_safe", 2.0);
+  m_safe_ = node_->has_parameter("b3.m_safe") ? node_->get_parameter("b3.m_safe").as_double()
+                                               : node_->declare_parameter<double>("b3.m_safe", 2.0);
   qddot_box_ = node_->declare_parameter<double>("b3.qddot_box", 8.0);
-  const double delta_tau_fraction = node_->declare_parameter<double>("b3.delta_tau_fraction", 0.05);
+  const double delta_tau_fraction = node_->has_parameter("b3.delta_tau_fraction")
+                                         ? node_->get_parameter("b3.delta_tau_fraction").as_double()
+                                         : node_->declare_parameter<double>("b3.delta_tau_fraction", 0.05);
 
   if (!dynamics_.initialize(node_, planning_scene_monitor_->getRobotModel(), group_name_, root_link, tip_link))
   {
@@ -47,7 +56,8 @@ bool B3ConstraintSolver::initialize(const rclcpp::Node::SharedPtr& node,
   {
     const std::string& joint_name = dynamics_.jointNames()[i];
     const std::string param_name = "b3.tau_max." + joint_name;
-    tau_max_(i) = node_->declare_parameter<double>(param_name, 0.0);
+    tau_max_(i) = node_->has_parameter(param_name) ? node_->get_parameter(param_name).as_double()
+                                                    : node_->declare_parameter<double>(param_name, 0.0);
     if (tau_max_(i) <= 0.0)
     {
       RCLCPP_ERROR(LOGGER, "B3ConstraintSolver: missing/invalid tau_max for joint '%s' (param '%s')",
@@ -68,69 +78,6 @@ bool B3ConstraintSolver::reset()
 {
   braked_ = false;
   return true;
-}
-
-double B3ConstraintSolver::computeMPhys(const robot_trajectory::RobotTrajectory& horizon, int& binding_step) const
-{
-  const unsigned int num_joints = dynamics_.numJoints();
-  const moveit::core::JointModelGroup* jmg = horizon.getGroup();
-  double m_phys = std::numeric_limits<double>::infinity();
-  binding_step = -1;
-
-  for (std::size_t j = 0; j < horizon.getWayPointCount(); ++j)
-  {
-    const moveit::core::RobotState& state_j = horizon.getWayPoint(j);
-    std::vector<double> q_v, qdot_v, qddot_v;
-    state_j.copyJointGroupPositions(jmg, q_v);
-    if (state_j.hasVelocities())
-    {
-      state_j.copyJointGroupVelocities(jmg, qdot_v);
-    }
-    else
-    {
-      qdot_v.assign(num_joints, 0.0);
-    }
-    if (state_j.hasAccelerations())
-    {
-      state_j.copyJointGroupAccelerations(jmg, qddot_v);
-    }
-    else
-    {
-      qddot_v.assign(num_joints, 0.0);
-    }
-
-    KDL::JntArray q_kdl = dynamics_.toKdlOrder(q_v);
-    KDL::JntArray qdot_kdl = dynamics_.toKdlOrder(qdot_v);
-    Eigen::VectorXd qddot(num_joints);
-    for (unsigned int i = 0; i < num_joints; ++i)
-    {
-      qddot(i) = qddot_v[dynamics_.kdlToMoveitIndex()[i]];
-    }
-
-    Eigen::MatrixXd mass;
-    Eigen::VectorXd bias;
-    if (!dynamics_.computeDynamics(q_kdl, qdot_kdl, mass, bias))
-    {
-      continue;  // skip this step's contribution rather than fail the whole horizon
-    }
-    Eigen::VectorXd tau = mass * qddot + bias;
-    double step_min = std::numeric_limits<double>::infinity();
-    for (unsigned int i = 0; i < num_joints; ++i)
-    {
-      const double m = tau_max_(i) - std::abs(tau(i)) - delta_tau_(i);
-      step_min = std::min(step_min, m);
-      if (m < m_phys)
-      {
-        m_phys = m;
-        binding_step = static_cast<int>(j);
-      }
-    }
-    if (const char* dbg = std::getenv("B3_DEBUG_HORIZON"); dbg != nullptr)
-    {
-      RCLCPP_INFO(LOGGER, "B3 debug: step %zu step_min_margin=%.4f", j, step_min);
-    }
-  }
-  return m_phys;
 }
 
 moveit_msgs::action::LocalPlanner::Feedback
@@ -166,7 +113,7 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
   }
 
   int binding_step = -1;
-  const double m_phys = computeMPhys(local_trajectory, binding_step);
+  const double m_phys = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, local_trajectory, binding_step);
 
   if (m_phys >= m_safe_)
   {

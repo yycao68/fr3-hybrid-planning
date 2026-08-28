@@ -14,6 +14,8 @@
 #include <moveit/local_planner/trajectory_operator_interface.h>
 #include <moveit/trajectory_processing/time_optimal_trajectory_generation.h>
 
+#include <fr3_dynamics/franka_chain_dynamics.hpp>
+
 namespace fr3_b3_local_planner
 {
 
@@ -53,6 +55,19 @@ private:
   // TrajectoryOperatorInterface), in duration-from-start seconds -- the
   // continuous-time analog of SimpleSampler's next_waypoint_index_.
   double current_duration_{ 0.0 };
+
+  // Phase 3b, Level 1 (route-level retiming): a second FrankaChainDynamics
+  // instance (cheap -- just builds a KDL chain once at initialize) plus
+  // its own copies of the certificate params B3ConstraintSolver already
+  // declares, so addTrajectorySegment can evaluate the whole route's
+  // margin and search for a retiming factor without depending on the
+  // OTHER plugin instance (pluginlib gives LocalPlannerComponent no way
+  // to hand one plugin a pointer to another).
+  fr3_dynamics::FrankaChainDynamics dynamics_;
+  Eigen::VectorXd tau_max_;
+  Eigen::VectorXd delta_tau_;
+  double m_safe_{ 2.0 };
+  double lam_max_{ 4.0 };
 };
 
 }  // namespace fr3_b3_local_planner

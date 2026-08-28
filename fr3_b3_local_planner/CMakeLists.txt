@@ -36,6 +36,8 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
 
 add_library(horizon_trajectory_operator_plugin SHARED
   src/horizon_trajectory_operator.cpp
+  src/torque_margin_certificate.cpp
+  src/route_retime_search.cpp
 )
 target_include_directories(horizon_trajectory_operator_plugin PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -45,6 +47,7 @@ ament_target_dependencies(horizon_trajectory_operator_plugin ${THIS_PACKAGE_INCL
 
 add_library(b3_constraint_solver_plugin SHARED
   src/b3_constraint_solver.cpp
+  src/torque_margin_certificate.cpp
 )
 target_include_directories(b3_constraint_solver_plugin PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
