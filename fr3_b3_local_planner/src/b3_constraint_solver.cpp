@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <optional>
 
 #include <moveit/local_planner/feedback_types.h>
 #include <moveit/planning_scene/planning_scene.h>
@@ -39,10 +41,20 @@ bool B3ConstraintSolver::initialize(const rclcpp::Node::SharedPtr& node,
                                                    : node_->declare_parameter<double>("b3.dt", 0.02);
   m_safe_ = node_->has_parameter("b3.m_safe") ? node_->get_parameter("b3.m_safe").as_double()
                                                : node_->declare_parameter<double>("b3.m_safe", 2.0);
-  qddot_box_ = node_->declare_parameter<double>("b3.qddot_box", 8.0);
+  qddot_box_ = node_->has_parameter("b3.qddot_box") ? node_->get_parameter("b3.qddot_box").as_double()
+                                                     : node_->declare_parameter<double>("b3.qddot_box", 8.0);
   const double delta_tau_fraction = node_->has_parameter("b3.delta_tau_fraction")
                                          ? node_->get_parameter("b3.delta_tau_fraction").as_double()
                                          : node_->declare_parameter<double>("b3.delta_tau_fraction", 0.05);
+  reshape_w_acc_ = node_->has_parameter("b3.reshape_w_acc")
+                       ? node_->get_parameter("b3.reshape_w_acc").as_double()
+                       : node_->declare_parameter<double>("b3.reshape_w_acc", 1.0);
+  reshape_w_pos_ = node_->has_parameter("b3.reshape_w_pos")
+                       ? node_->get_parameter("b3.reshape_w_pos").as_double()
+                       : node_->declare_parameter<double>("b3.reshape_w_pos", 0.1);
+  reshape_w_vel_ = node_->has_parameter("b3.reshape_w_vel")
+                       ? node_->get_parameter("b3.reshape_w_vel").as_double()
+                       : node_->declare_parameter<double>("b3.reshape_w_vel", 0.1);
 
   if (!dynamics_.initialize(node_, planning_scene_monitor_->getRobotModel(), group_name_, root_link, tip_link))
   {
@@ -115,6 +127,33 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
   int binding_step = -1;
   const double m_phys = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, local_trajectory, binding_step);
 
+  bool used_reshape = false;
+  double reshape_margin = 0.0;
+  std::optional<robot_trajectory::RobotTrajectory> reshaped;
+  if (m_phys < m_safe_)
+  {
+    // Level 2 (online reshape), tried before Level 4: a nearby, torque-
+    // feasible acceleration profile over the SAME horizon window may
+    // restore the margin without braking. Re-solved fresh every cycle
+    // like B3ConstraintSolver's whole flow (paper Sec. VI's "receding
+    // horizon" design), so only the reshaped horizon's FIRST waypoint is
+    // ever commanded, same one-step-per-cycle output shape Level 0/4
+    // already use.
+    reshaped = tryReshape(dynamics_, tau_max_, delta_tau_, qddot_box_, reshape_w_acc_, reshape_w_pos_,
+                           reshape_w_vel_, local_trajectory, nullptr, nullptr);
+    if (reshaped.has_value())
+    {
+      int reshaped_binding_step = -1;
+      reshape_margin = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reshaped, reshaped_binding_step);
+      used_reshape = reshape_margin >= m_safe_;
+    }
+    if (std::getenv("B3_DEBUG_HORIZON") != nullptr)
+    {
+      RCLCPP_INFO(LOGGER, "B3 debug [online-reshape]: m0=%.4f solved=%d reshape_margin=%.4f", m_phys,
+                  reshaped.has_value(), reshape_margin);
+    }
+  }
+
   if (m_phys >= m_safe_)
   {
     // Level 0: pass the horizon's first waypoint through unmodified, same
@@ -124,13 +163,21 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
     const double duration = local_trajectory.getWayPointDurationFromPrevious(0);
     robot_command.addSuffixWayPoint(local_trajectory.getWayPoint(0), duration);
   }
+  else if (used_reshape)
+  {
+    RCLCPP_INFO(LOGGER, "B3: Level 2 (reshape) applied: margin %.3f -> %.3f", m_phys, reshape_margin);
+    const double duration = reshaped->getWayPointDurationFromPrevious(0);
+    robot_command.addSuffixWayPoint(reshaped->getWayPoint(0), duration);
+  }
   else
   {
     // Level 4 trigger. binding_step > 0 here means the certificate caught
     // a violation at a FUTURE horizon step before the current step (step 0)
     // itself was in violation -- the genuinely predictive case this phase
     // exists to demonstrate, as opposed to binding_step == 0 (a violation
-    // already present right now, which B2 would also have caught).
+    // already present right now, which B2 would also have caught). Level 2
+    // was tried above and either failed to solve or didn't fully restore
+    // the margin -- Level 4's brake remains the safety net either way.
     RCLCPP_INFO(LOGGER,
                 "B3: m_phys=%.3f < m_safe=%.3f at horizon step %d -- triggering Level 4 (sticky brake)",
                 m_phys, m_safe_, binding_step);

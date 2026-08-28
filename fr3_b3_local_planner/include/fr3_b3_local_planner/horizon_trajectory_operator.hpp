@@ -15,6 +15,7 @@
 #include <moveit/trajectory_processing/time_optimal_trajectory_generation.h>
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
+#include <fr3_b3_local_planner/reshape_qp.hpp>
 
 namespace fr3_b3_local_planner
 {
@@ -68,6 +69,14 @@ private:
   Eigen::VectorXd delta_tau_;
   double m_safe_{ 2.0 };
   double lam_max_{ 4.0 };
+
+  // Phase 3c, Level 2 (route-level reshape): tried once retiming (above)
+  // is confirmed exhausted, pinned to reach the route's own original goal
+  // (terminal_q = qf, terminal_qdot = 0) -- see reshape_qp.hpp.
+  double qddot_box_{ 8.0 };
+  double reshape_w_acc_{ 1.0 };
+  double reshape_w_pos_{ 0.1 };
+  double reshape_w_vel_{ 0.1 };
 };
 
 }  // namespace fr3_b3_local_planner

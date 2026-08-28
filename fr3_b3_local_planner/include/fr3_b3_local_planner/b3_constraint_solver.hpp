@@ -24,6 +24,7 @@
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
 #include <fr3_b3_local_planner/torque_margin_certificate.hpp>
+#include <fr3_b3_local_planner/reshape_qp.hpp>
 
 namespace fr3_b3_local_planner
 {
@@ -54,8 +55,15 @@ private:
   Eigen::VectorXd tau_max_;    // real FR3 per-joint effort limits (N*m)
   Eigen::VectorXd delta_tau_;  // uncertainty bound, delta_tau_fraction * tau_max_ (certificate.py default: 5%)
   double m_safe_{ 2.0 };       // N*m; paper's own default, flagged for FR3-scale sanity-check (see plan)
-  double qddot_box_{ 8.0 };    // rad/s^2, brake-profile deceleration bound (local_planner.py::PlannerConfig default)
+  double qddot_box_{ 8.0 };    // rad/s^2, brake-profile deceleration bound AND Level-2 reshape QP's |qddot| box
   double control_period_{ 0.02 };  // seconds; matches b3.dt (HorizonTrajectoryOperator)
+
+  // Phase 3c, Level 2 (online reshape): PlannerConfig's own defaults --
+  // reshape_w_acc dominates since the deficit the QP exists to fix is a
+  // torque violation, which only qddot controls directly.
+  double reshape_w_acc_{ 1.0 };
+  double reshape_w_pos_{ 0.1 };
+  double reshape_w_vel_{ 0.1 };
 
   // Level 4 is STICKY (code/baselines.py::policy_b3): once triggered, every
   // subsequent solve() call holds at whatever position the robot actually

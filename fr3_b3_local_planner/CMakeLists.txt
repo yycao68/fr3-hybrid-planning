@@ -23,6 +23,7 @@ find_package(pluginlib REQUIRED)
 find_package(fr3_dynamics REQUIRED)
 find_package(orocos_kdl_vendor REQUIRED)
 find_package(orocos_kdl REQUIRED)
+find_package(OsqpEigen REQUIRED)
 
 set(THIS_PACKAGE_INCLUDE_DEPENDS
   rclcpp
@@ -38,22 +39,26 @@ add_library(horizon_trajectory_operator_plugin SHARED
   src/horizon_trajectory_operator.cpp
   src/torque_margin_certificate.cpp
   src/route_retime_search.cpp
+  src/reshape_qp.cpp
 )
 target_include_directories(horizon_trajectory_operator_plugin PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(horizon_trajectory_operator_plugin ${THIS_PACKAGE_INCLUDE_DEPENDS})
+target_link_libraries(horizon_trajectory_operator_plugin OsqpEigen::OsqpEigen)
 
 add_library(b3_constraint_solver_plugin SHARED
   src/b3_constraint_solver.cpp
   src/torque_margin_certificate.cpp
+  src/reshape_qp.cpp
 )
 target_include_directories(b3_constraint_solver_plugin PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(b3_constraint_solver_plugin ${THIS_PACKAGE_INCLUDE_DEPENDS})
+target_link_libraries(b3_constraint_solver_plugin OsqpEigen::OsqpEigen)
 
 pluginlib_export_plugin_description_file(moveit_hybrid_planning horizon_trajectory_operator_plugin.xml)
 pluginlib_export_plugin_description_file(moveit_hybrid_planning b3_constraint_solver_plugin.xml)
