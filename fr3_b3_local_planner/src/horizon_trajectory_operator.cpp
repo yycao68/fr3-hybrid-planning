@@ -462,11 +462,31 @@ HorizonTrajectoryOperator::getLocalTrajectory(const moveit::core::RobotState& cu
   return feedback;
 }
 
-double HorizonTrajectoryOperator::getTrajectoryProgress(const moveit::core::RobotState& /* current_state */)
+double HorizonTrajectoryOperator::getTrajectoryProgress(const moveit::core::RobotState& current_state)
 {
   if (reference_trajectory_->getWayPointCount() == 0)
     return 1.0;
-  return (current_duration_ >= reference_trajectory_->getDuration()) ? 1.0 : 0.0;
+  if (current_duration_ < reference_trajectory_->getDuration())
+    return 0.0;
+  // Goal-execution-fragility fix: current_duration_ reaching the route's
+  // own duration means REFERENCE progress is done, but NOT necessarily
+  // that the REAL robot has actually gotten there. Confirmed live:
+  // reporting done immediately here let the local planner stop
+  // commanding entirely (LocalPlannerComponent's own executeIteration()
+  // cancels its timer the instant this returns >0.995), and the arm
+  // then DRIFTED from a near-converged 0.107 rad error to 0.701 with
+  // nothing left to correct it (no Level 4 trigger; diagnostics simply
+  // stopped). Require the real state to also be within
+  // WAYPOINT_RADIAN_TOLERANCE of the route's own final waypoint before
+  // reporting done, so the local planner keeps actively holding/
+  // correcting toward the true target instead of abandoning a
+  // not-yet-converged robot. If the real robot never gets there, this
+  // simply never returns 1.0 -- safe, since run_one()'s own external
+  // goal_timeout is what actually bounds every run, not this.
+  const moveit::core::RobotState& final_waypoint =
+      reference_trajectory_->getWayPoint(reference_trajectory_->getWayPointCount() - 1);
+  const double dist = final_waypoint.distance(current_state, joint_group_);
+  return (dist <= WAYPOINT_RADIAN_TOLERANCE) ? 1.0 : 0.0;
 }
 
 }  // namespace fr3_b3_local_planner
