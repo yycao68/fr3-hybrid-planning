@@ -38,6 +38,23 @@ from run_experiment import GOALS
 # characterized; reuses the same tolerance as a starting point.
 POS_TOL_RAD = 0.06
 
+# Terminal-window task success (external review finding): checking only
+# the single LAST /joint_states sample doesn't verify the arm actually
+# SETTLED there -- it only confirms that one instant happened to be
+# within tolerance, which could be a transient rather than a converged
+# state. Empirical spot-checks across three real scenario types (a plain
+# successful "small" run, an ongoing-force-disturbance "small_slow" run,
+# and a "stuck"/failing large-payload run) all showed the terminal window
+# already extremely stable in practice (error unchanged to the 5th
+# decimal for the whole window) -- but relying on a single sample is
+# still not a robust methodology regardless of what today's test cases
+# happen to look like. run_one() already sleeps 1.0s after the action
+# reports done specifically so the tail is settled (see its own
+# comment); this window is a fraction of that, not the whole thing, so
+# it stays inside the settled region even for the shortest goals
+# ("small_slow"'s own route is itself only ~0.3-0.6s).
+SETTLE_WINDOW_S = 0.3
+
 
 def read_bag(bag_dir: str):
     reader = rosbag2_py.SequentialReader()
@@ -85,7 +102,28 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
         raise RuntimeError(f"missing goal joints in final /joint_states: {sorted(missing)}")
     err_sq = sum((final_positions[name] - goal_val) ** 2 for name, goal_val in goal_targets.items())
     final_pos_error_rad = err_sq ** 0.5
-    task_success = final_pos_error_rad <= POS_TOL_RAD
+
+    # task_success requires the WORST (max) error across the last
+    # SETTLE_WINDOW_S of real time to be within tolerance, not just the
+    # single final sample -- a genuinely-settled criterion, per this
+    # file's own SETTLE_WINDOW_S comment. Samples within the window
+    # missing a goal joint are skipped rather than hard-failing the whole
+    # run (the last sample's own completeness is already enforced above;
+    # an earlier sample transiently missing one is a publishing artifact,
+    # not something this check needs to be strict about).
+    t_end = joint_states[-1][0]
+    window_cutoff = t_end - int(SETTLE_WINDOW_S * 1e9)
+    window_errors = []
+    for t, msg in joint_states:
+        if t < window_cutoff:
+            continue
+        positions = dict(zip(msg.name, msg.position))
+        if set(goal_targets) - set(positions):
+            continue
+        e_sq = sum((positions[name] - goal_val) ** 2 for name, goal_val in goal_targets.items())
+        window_errors.append(e_sq ** 0.5)
+    terminal_window_max_error_rad = max(window_errors) if window_errors else final_pos_error_rad
+    task_success = terminal_window_max_error_rad <= POS_TOL_RAD
 
     t0 = joint_states[0][0]
     t1 = joint_states[-1][0]
@@ -93,6 +131,7 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
 
     result = {
         "final_pos_error_rad": final_pos_error_rad,
+        "terminal_window_max_error_rad": terminal_window_max_error_rad,
         "task_success": task_success,
         "duration_s": duration_s,
         "controller": None,
@@ -102,6 +141,7 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
         "route_level_events": None,
     }
     log(f"final_pos_error_rad: {final_pos_error_rad:.5f}")
+    log(f"terminal_window_max_error_rad: {terminal_window_max_error_rad:.5f} (last {SETTLE_WINDOW_S}s)")
     log(f"task_success: {task_success}")
     log(f"duration_s: {duration_s:.3f}")
 
