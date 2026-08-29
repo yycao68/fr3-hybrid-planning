@@ -128,6 +128,19 @@ def generate_launch_description():
         global_planner_param['replay_trajectory_path'] = replay_trajectory_path
     local_planner_param = load_yaml(
         'fr3_mujoco_bringup', 'config/hybrid_planning/local_planner_b3.yaml')
+    # Root-cause fix (Phase 4c-fix determinism investigation): the local
+    # trajectory operator's own re-time step (computeTimeStamps) defaults
+    # to full URDF joint-limit speed regardless of the goal's own
+    # max_velocity_scaling_factor/max_acceleration_scaling_factor --
+    # moveit_msgs/MotionPlanResponse (all LocalPlannerComponent ever sees)
+    # doesn't carry those fields, so they were never reachable here. These
+    # default to 1.0 (a true no-op, matching every pre-existing baseline);
+    # exp3_interaction_force.py sets them explicitly to match its own
+    # goal's requested scale.
+    local_scaling_param = {
+        'local_velocity_scaling': float(os.environ.get('FR3_LOCAL_VEL_SCALE', '1.0')),
+        'local_acceleration_scaling': float(os.environ.get('FR3_LOCAL_ACCEL_SCALE', '1.0')),
+    }
     hybrid_planning_manager_param = load_yaml(
         'fr3_mujoco_bringup', 'config/hybrid_planning/hybrid_planning_manager.yaml')
     # FR3_B3_PARAMS_YAML lets the Phase 3a verification pass select an
@@ -166,6 +179,7 @@ def generate_launch_description():
                 parameters=[
                     common_hybrid_planning_param,
                     local_planner_param,
+                    local_scaling_param,
                     b3_params_param,
                     b3_force_params,
                     robot_description,

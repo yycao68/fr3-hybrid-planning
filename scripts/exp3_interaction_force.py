@@ -53,6 +53,25 @@ FORCE_ENV = {
     "FR3_FORCE_T_ONSET": "0.3",
     "FR3_FORCE_RAMP_DURATION": "0.5",
     "FR3_FORCE_FZ": "-90.0",
+    # Root-cause fix (deterministic-replay investigation): the local
+    # trajectory operator's own re-time step used to silently ignore
+    # GOAL's own vel_scale/accel_scale entirely (always ran at full URDF
+    # joint-limit speed) -- confirmed live, "small_slow" (0.15x requested)
+    # produced essentially the SAME real route duration as "small" (0.5x
+    # requested). This is what made the online detection window so short
+    # that it closed just before the certificate's margin crossed zero.
+    # Now that local_velocity_scaling/local_acceleration_scaling are real
+    # params (see fr3_b3_demo.launch.py's own comment), set them here --
+    # NOT reused from GOAL's own vel_scale (0.15): an empirical sweep found
+    # route duration stays flat (~0.32-0.34s) from scale 1.0 down to 0.05,
+    # then jumps abruptly to 0.61s at 0.02 -- a non-monotonic MoveIt TOTG
+    # response on this near-degenerate 2-waypoint path, not a smooth
+    # physical one (see README's "Known environmental gaps"). 0.02 is the
+    # smallest value tried in that neutral duration-only sweep (chosen
+    # before ever looking at detection outcomes), not tuned against this
+    # experiment's own result.
+    "FR3_LOCAL_VEL_SCALE": "0.02",
+    "FR3_LOCAL_ACCEL_SCALE": "0.02",
 }
 
 FORCE_START_RE = re.compile(r"force injection schedule started at t=(-?[\d.]+)")

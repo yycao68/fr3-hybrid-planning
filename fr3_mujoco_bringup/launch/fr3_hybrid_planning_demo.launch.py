@@ -122,6 +122,14 @@ def generate_launch_description():
         global_planner_param['replay_trajectory_path'] = replay_trajectory_path
     local_planner_param = load_yaml(
         'fr3_mujoco_bringup', 'config/hybrid_planning/local_planner.yaml')
+    # Root-cause fix (Phase 4c-fix determinism investigation): see
+    # fr3_b3_demo.launch.py's own comment on local_scaling_param -- stock
+    # SimpleSampler (B1's own trajectory operator) has the same gap, fixed
+    # the same way. Defaults to 1.0/1.0, a true no-op.
+    local_scaling_param = {
+        'local_velocity_scaling': float(os.environ.get('FR3_LOCAL_VEL_SCALE', '1.0')),
+        'local_acceleration_scaling': float(os.environ.get('FR3_LOCAL_ACCEL_SCALE', '1.0')),
+    }
     hybrid_planning_manager_param = load_yaml(
         'fr3_mujoco_bringup', 'config/hybrid_planning/hybrid_planning_manager.yaml')
 
@@ -153,6 +161,7 @@ def generate_launch_description():
                 parameters=[
                     common_hybrid_planning_param,
                     local_planner_param,
+                    local_scaling_param,
                     robot_description,
                     robot_description_semantic,
                     kinematics_yaml,

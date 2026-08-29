@@ -32,6 +32,9 @@ bool HorizonTrajectoryOperator::initialize(const rclcpp::Node::SharedPtr& node,
     return false;
   }
   horizon_steps_ = node_->declare_parameter<int>("b3.horizon_steps", 15);
+  // See this class's own header comment for why these aren't b3.-namespaced.
+  velocity_scaling_ = node_->declare_parameter<double>("local_velocity_scaling", 1.0);
+  acceleration_scaling_ = node_->declare_parameter<double>("local_acceleration_scaling", 1.0);
   // The following params are shared with B3ConstraintSolver, loaded into
   // the SAME node -- whichever plugin initializes first declares them, the
   // other just reads them back (same has_parameter guard pattern as b3.dt,
@@ -145,7 +148,7 @@ HorizonTrajectoryOperator::addTrajectorySegment(const robot_trajectory::RobotTra
 {
   reset();
   reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(new_trajectory);
-  time_parametrization_.computeTimeStamps(*reference_trajectory_);
+  time_parametrization_.computeTimeStamps(*reference_trajectory_, velocity_scaling_, acceleration_scaling_);
 
   // Route-level, once-per-segment cascade (paper Sec. V-B /
   // local_planner.py::plan_route's own ordering: retime -> reshape ->

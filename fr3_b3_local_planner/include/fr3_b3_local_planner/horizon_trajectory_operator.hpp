@@ -56,6 +56,23 @@ private:
   // per-waypoint durations.
   trajectory_processing::TimeOptimalTrajectoryGeneration time_parametrization_;
 
+  // FR3 platform local fix: computeTimeStamps() defaults both scaling
+  // factors to 1.0 (full URDF joint-limit speed) unless told otherwise --
+  // moveit_msgs/MotionPlanResponse (all addTrajectorySegment ever
+  // receives, via LocalPlannerComponent's own global_solution_subscriber_)
+  // carries no max_velocity_scaling_factor/max_acceleration_scaling_factor
+  // field, so the original MotionPlanRequest's own values were never
+  // reachable here -- confirmed live: "small" (vel_scale=0.5) and
+  // "small_slow" (vel_scale=0.15) produced nearly IDENTICAL real route
+  // durations (0.339s vs 0.325s) before this fix, i.e. the "_slow" label
+  // never actually slowed anything down. Plain (non-b3.-namespaced) node
+  // params, same names SimpleSampler now reads too, so one launch-file-
+  // level param dict applies uniformly regardless of which trajectory
+  // operator plugin is loaded. Default 1.0/1.0 is a true no-op, matching
+  // every pre-existing behavior.
+  double velocity_scaling_{ 1.0 };
+  double acceleration_scaling_{ 1.0 };
+
   // Progress along reference_trajectory_ (inherited from
   // TrajectoryOperatorInterface), in duration-from-start seconds -- the
   // continuous-time analog of SimpleSampler's next_waypoint_index_.
