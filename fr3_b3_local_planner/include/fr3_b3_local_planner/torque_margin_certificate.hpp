@@ -8,6 +8,7 @@
 #include <moveit/robot_trajectory/robot_trajectory.h>
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
+#include <fr3_dynamics/force_schedule.hpp>
 
 namespace fr3_b3_local_planner
 {
@@ -22,9 +23,20 @@ namespace fr3_b3_local_planner
 // "whole-route" for Phase 3b's retime search) -- lets the same debug
 // technique used to verify Phase 3a's certificate be reused for tuning
 // Phase 3b's retime scenarios.
+//
+// Phase 4c: `force_schedule` (default nullptr -- every pre-existing call
+// site is a true no-op) folds an external end-effector force into each
+// waypoint's own tau = mass*qddot + bias - J(q)^T@F_ext, evaluated at that
+// waypoint's own absolute schedule time (`force_t0` + `trajectory`'s own
+// getWayPointDurationFromStart(j)) and its own FK tip position -- this one
+// function already serves both B3ConstraintSolver's online per-cycle check
+// and HorizonTrajectoryOperator's route-level Level 1 retime search, so
+// one signature change threads force into both at once.
 double computeMPhysOverTrajectory(const fr3_dynamics::FrankaChainDynamics& dynamics,
                                    const Eigen::VectorXd& tau_max, const Eigen::VectorXd& delta_tau,
                                    const robot_trajectory::RobotTrajectory& trajectory, int& binding_step,
-                                   const char* log_tag = "horizon");
+                                   const char* log_tag = "horizon",
+                                   const fr3_dynamics::ForceSchedule* force_schedule = nullptr,
+                                   double force_t0 = 0.0);
 
 }  // namespace fr3_b3_local_planner

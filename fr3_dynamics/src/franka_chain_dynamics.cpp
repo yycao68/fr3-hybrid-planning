@@ -3,6 +3,7 @@
 #include <map>
 
 #include <kdl_parser/kdl_parser.hpp>
+#include <kdl/jacobian.hpp>
 #include <urdf/model.h>
 
 namespace
@@ -55,6 +56,8 @@ bool FrankaChainDynamics::initialize(const rclcpp::Node::SharedPtr& node,
   }
 
   dyn_param_ = std::make_unique<KDL::ChainDynParam>(kdl_chain_, KDL::Vector(0.0, 0.0, -9.81));
+  jac_solver_ = std::make_unique<KDL::ChainJntToJacSolver>(kdl_chain_);
+  fk_solver_ = std::make_unique<KDL::ChainFkSolverPos_recursive>(kdl_chain_);
 
   const moveit::core::JointModelGroup* jmg = robot_model->getJointModelGroup(group_name);
   if (!jmg)
@@ -101,6 +104,26 @@ bool FrankaChainDynamics::computeDynamics(const KDL::JntArray& q, const KDL::Jnt
   mass = H.data;
   bias = coriolis.data + gravity.data;
   return true;
+}
+
+Eigen::MatrixXd FrankaChainDynamics::computeJacobian(const KDL::JntArray& q) const
+{
+  KDL::Jacobian jac(num_joints_);
+  if (jac_solver_->JntToJac(q, jac) < 0)
+  {
+    return Eigen::MatrixXd(3, 0);
+  }
+  return jac.data.topRows(3);
+}
+
+Eigen::Vector3d FrankaChainDynamics::computeTipPosition(const KDL::JntArray& q) const
+{
+  KDL::Frame frame;
+  if (fk_solver_->JntToCart(q, frame) < 0)
+  {
+    return Eigen::Vector3d::Zero();
+  }
+  return Eigen::Vector3d(frame.p.x(), frame.p.y(), frame.p.z());
 }
 
 KDL::JntArray FrankaChainDynamics::toKdlOrder(const std::vector<double>& moveit_group_vec) const

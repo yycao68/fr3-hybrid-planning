@@ -48,12 +48,14 @@ robot_trajectory::RobotTrajectory retimeTrajectory(const robot_trajectory::Robot
 std::optional<double> searchRetimeLambda(const fr3_dynamics::FrankaChainDynamics& dynamics,
                                           const Eigen::VectorXd& tau_max, const Eigen::VectorXd& delta_tau,
                                           double m_safe, double lam_max,
-                                          const robot_trajectory::RobotTrajectory& traj)
+                                          const robot_trajectory::RobotTrajectory& traj,
+                                          const fr3_dynamics::ForceSchedule* force_schedule, double force_t0)
 {
   int binding_step = -1;
   auto margin_at = [&](double lambda) {
     robot_trajectory::RobotTrajectory retimed = retimeTrajectory(traj, lambda);
-    return computeMPhysOverTrajectory(dynamics, tau_max, delta_tau, retimed, binding_step, "whole-route");
+    return computeMPhysOverTrajectory(dynamics, tau_max, delta_tau, retimed, binding_step, "whole-route",
+                                       force_schedule, force_t0);
   };
 
   const double m_at_max = margin_at(lam_max);

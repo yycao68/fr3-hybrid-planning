@@ -16,6 +16,7 @@
 #include <moveit/robot_trajectory/robot_trajectory.h>
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
+#include <fr3_dynamics/force_schedule.hpp>
 
 namespace fr3_b3_local_planner
 {
@@ -39,10 +40,18 @@ namespace fr3_b3_local_planner
 // which falls back to SCS when OSQP alone doesn't converge on the larger
 // whole-route problem -- see the Phase 3c plan for how this is handled
 // (reported, not hidden, exactly like Phase 3b's "retime exhausted" case).
+//
+// Phase 4c: `force_schedule` (default nullptr -- every pre-existing call
+// site is a true no-op) folds -J(q)^T@F_ext directly into each step's own
+// linearization-point bias vector before the QP rows are built, so every
+// downstream torque-box row already reflects the external force with no
+// further changes -- same evaluation convention (own absolute schedule
+// time, own FK tip position) as computeMPhysOverTrajectory.
 std::optional<robot_trajectory::RobotTrajectory>
 tryReshape(const fr3_dynamics::FrankaChainDynamics& dynamics, const Eigen::VectorXd& tau_max,
            const Eigen::VectorXd& delta_tau, double qddot_box, double w_acc, double w_pos, double w_vel,
            const robot_trajectory::RobotTrajectory& nominal, const Eigen::VectorXd* terminal_q,
-           const Eigen::VectorXd* terminal_qdot);
+           const Eigen::VectorXd* terminal_qdot,
+           const fr3_dynamics::ForceSchedule* force_schedule = nullptr, double force_t0 = 0.0);
 
 }  // namespace fr3_b3_local_planner

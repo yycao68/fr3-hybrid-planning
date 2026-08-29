@@ -22,14 +22,17 @@
 // control law.
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 #include <moveit/local_planner/local_constraint_solver_interface.h>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <std_msgs/msg/empty.hpp>
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
+#include <fr3_dynamics/force_schedule.hpp>
 
 #include <OsqpEigen/OsqpEigen.h>
 
@@ -68,6 +71,23 @@ private:
 
   Eigen::VectorXd tau_max_;  // real FR3 per-joint effort limits (N*m), indexed like dynamics_.jointNames()
   double control_period_{ 0.01 };  // seconds; 1 / local_planning_frequency
+  std::string tip_link_;  // stored for FK (getGlobalLinkTransform) lookups, e.g. Phase 4c's ee_z
+
+  // Phase 4c: external end-effector force, sampled at the CURRENT instant
+  // only (no lookahead) -- code/baselines.py::policy_b2 samples
+  // ee_force_schedule(t, q_actual) at each real step, never predicting
+  // forward, unlike B3's horizon-based prediction. b2.force_mode == ""
+  // (default) disables this entirely -- a true no-op on every existing
+  // scenario.
+  fr3_dynamics::ForceSchedule force_schedule_;
+  bool force_schedule_enabled_{ false };
+  // Written from force_start_sub_'s callback, which the composable-node
+  // container's own multi-threaded executor may run on a different thread
+  // than solve() -- atomic, not plain bool/rclcpp::Time, for that reason
+  // (same finding/fix as mujoco_ros2_control.cpp's own force_started_).
+  std::atomic<bool> force_started_{ false };
+  std::atomic<double> force_t0_sec_{ 0.0 };
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr force_start_sub_;
 
   // Phase 4a: per-cycle observability. Level 0/2/4-style RCLCPP_INFO log
   // lines already exist for TRIGGER events but not for every cycle (e.g.

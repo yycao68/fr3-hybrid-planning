@@ -35,6 +35,8 @@ import time
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy
+from std_msgs.msg import Empty
 from moveit_msgs.action import HybridPlanner
 from moveit_msgs.msg import (
     Constraints, JointConstraint, MotionPlanRequest,
@@ -73,6 +75,44 @@ GOALS = {
         },
         tolerance=0.01, vel_scale=0.5, accel_scale=0.5,
     ),
+    # Phase 4c: identical targets to "small" (so it's B1-achievable, unlike
+    # "large" -- Phase 4b's finding), slowed down (0.15x) so a fast goal's
+    # ~0.3-0.5s execution window isn't comparable in size to real
+    # inter-process launch/planning jitter (~0.4s, confirmed live), which
+    # would otherwise swamp a sub-second force ramp's own timing signal.
+    # Pushing the scale lower still (0.08, 0.02 both tried) hits a real
+    # OMPL/time-parameterization edge case -- the route collapses to a
+    # ~0.02s duration and never progresses, instead of scaling up as
+    # expected -- so 0.15 (~0.35s route) is what's used, not a longer one.
+    # This route duration is still shorter than the certificate's own
+    # online receding horizon (15 steps * 0.02s = 0.3s), which keeps
+    # evaluating PAST route completion via "hold at terminal state" --
+    # ground_truth.py's ground-truth check extends its own evaluation
+    # window to cover that same hold phase for exactly this reason (see
+    # torque_margin_certificate.cpp's own "whole-route-extended" block).
+    "small_slow": dict(
+        targets={
+            "fr3_joint1": 0.02, "fr3_joint2": -0.02, "fr3_joint3": 0.02, "fr3_joint4": -0.171,
+            "fr3_joint5": 0.02, "fr3_joint6": 0.563, "fr3_joint7": 0.02,
+        },
+        tolerance=0.01, vel_scale=0.15, accel_scale=0.15,
+    ),
+    # Phase 4c, Exp4: "small_slow"'s own joint2/joint4 pushed further (a
+    # bigger shoulder/elbow swing -- FR3's own most direct joints for EE
+    # *height*, confirmed empirically) so the end-effector's own Z travels
+    # meaningfully (~16mm, vs "small_slow"'s own ~4mm) -- needed so a
+    # position-triggered contact_z can actually be crossed during real
+    # motion. B1 cannot execute this one (confirmed live: joints barely
+    # move, same "stuck, not just slow" signature Phase 4b found on
+    # "large" -- a real, disclosed, pre-existing platform limitation, not
+    # something this phase introduces or attempts to fix).
+    "medium_slow": dict(
+        targets={
+            "fr3_joint1": 0.02, "fr3_joint2": -0.4, "fr3_joint3": 0.02, "fr3_joint4": -0.5,
+            "fr3_joint5": 0.02, "fr3_joint6": 0.563, "fr3_joint7": 0.02,
+        },
+        tolerance=0.01, vel_scale=0.15, accel_scale=0.15,
+    ),
     "large": dict(
         targets={
             "fr3_joint1": 0.6, "fr3_joint2": -0.6, "fr3_joint3": 0.4, "fr3_joint4": -0.9,
@@ -104,8 +144,18 @@ def wait_ready(log_path: str, timeout_s: float = 15.0) -> bool:
     return False
 
 
-def send_goal(domain_id: int, goal_spec: dict, timeout_s: float = 30.0):
-    """Returns (accepted: bool, error_code: int | None)."""
+def send_goal(domain_id: int, goal_spec: dict, timeout_s: float = 30.0, on_accepted=None):
+    """Returns (accepted: bool, error_code: int | None). If given,
+    `on_accepted(node)` is called (with this function's own already-active
+    rclpy node -- reused rather than creating a second one, since a nested
+    rclpy.init() while already spinning is not safe) the moment the
+    HybridPlanner action server accepts the goal request (global+local
+    planning about to start). Phase 4c's exp3_interaction_force.py uses
+    this to fire the force-start trigger right there instead of before
+    send_goal() is even called, which left several seconds of
+    unpredictable global/local planning overhead for a multi-second force
+    ramp to complete during, before any real execution (confirmed live: a
+    3s ramp fully completed before a single online solve() cycle ran)."""
     os.environ["ROS_DOMAIN_ID"] = str(domain_id)
     rclpy.init(args=["--ros-args"])
     node = Node("run_experiment_goal_sender")
@@ -151,6 +201,8 @@ def send_goal(domain_id: int, goal_spec: dict, timeout_s: float = 30.0):
         goal_handle = future.result()
         if goal_handle is None or not goal_handle.accepted:
             return result
+        if on_accepted is not None:
+            on_accepted(node)
 
         result_future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(node, result_future, timeout_sec=timeout_s)
@@ -161,6 +213,29 @@ def send_goal(domain_id: int, goal_spec: dict, timeout_s: float = 30.0):
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
+
+def publish_force_start(node):
+    """Phase 4c: publishes the one-shot /fr3_force_injection/start signal
+    (see fr3_mujoco_bringup launch files' own comment) that mujoco_ros2_control
+    and B2/B3 each use as their own local force-schedule t0. Called from
+    send_goal()'s own on_accepted hook, reusing its already-active node --
+    harmless when no force schedule is configured (FR3_FORCE_MODE="" on the
+    receiving end), since every consumer checks its own enabled flag before
+    ever looking at whether this arrived. transient_local QoS matches the
+    subscriber side, but that only helps a subscriber that discovers this
+    publisher WHILE it still exists -- confirmed live (Phase 4c
+    verification): a standalone publisher node torn down after a fixed
+    short sleep left mujoco_ros2_control's (a separate process) subscriber
+    without the message, silently leaving the SIMULATED force never
+    applied even though the certificate reacted as if it were. Reusing
+    send_goal()'s own node, which stays alive until the action RESULT
+    arrives (well past any plausible discovery delay), fixes this without
+    needing a guessed sleep duration at all.
+    """
+    qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+    pub = node.create_publisher(Empty, "/fr3_force_injection/start", qos)
+    pub.publish(Empty())
 
 
 def run_one(launch_file: str, bag_dir: str, extra_env: dict = None, goal: str = "small",
@@ -205,27 +280,33 @@ def run_one(launch_file: str, bag_dir: str, extra_env: dict = None, goal: str = 
         ["ros2", "bag", "record", "-o", bag_dir, "/joint_states", "/diagnostics", "/rosout"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
     )
-    time.sleep(0.5)  # let the recorder actually subscribe before the goal starts moving the robot
-
-    log("Sending goal...")
-    accepted, error_code = send_goal(domain_id, GOALS[goal], timeout_s=goal_timeout)
-    log(f"accepted={accepted} error_code={error_code} (1 == SUCCESS)")
-
-    # The HybridPlanner action reports done once trajectory PROGRESS
-    # completes, not once the real position/velocity PID controller has
-    # actually settled (confirmed repeatedly in earlier phases) -- record
-    # a brief settle window afterward so the bag's final /joint_states
-    # reflects genuine convergence, not the instant of action completion.
-    time.sleep(1.0)
-
-    bag_proc.send_signal(signal.SIGINT)
     try:
-        bag_proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        bag_proc.kill()
+        time.sleep(0.5)  # let the recorder actually subscribe before the goal starts moving the robot
 
-    launch_proc.terminate()
-    pkill_stragglers()
+        log("Sending goal...")
+        accepted, error_code = send_goal(domain_id, GOALS[goal], timeout_s=goal_timeout,
+                                          on_accepted=publish_force_start)
+        log(f"accepted={accepted} error_code={error_code} (1 == SUCCESS)")
+
+        # The HybridPlanner action reports done once trajectory PROGRESS
+        # completes, not once the real position/velocity PID controller has
+        # actually settled (confirmed repeatedly in earlier phases) -- record
+        # a brief settle window afterward so the bag's final /joint_states
+        # reflects genuine convergence, not the instant of action completion.
+        time.sleep(1.0)
+    finally:
+        # Guarantee bag/launch teardown even if send_goal() (or anything
+        # else above) raises (external review finding, confirmed real:
+        # without this, an exception here left bag_proc/launch_proc
+        # running until a LATER call's own pkill_stragglers() happened to
+        # clean them up).
+        bag_proc.send_signal(signal.SIGINT)
+        try:
+            bag_proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            bag_proc.kill()
+        launch_proc.terminate()
+        pkill_stragglers()
 
     log(f"Bag written to {bag_dir}")
     return {"accepted": accepted, "error_code": error_code, "bag_dir": bag_dir}

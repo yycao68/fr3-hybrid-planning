@@ -38,6 +38,39 @@ def generate_launch_description():
     # fr3_mujoco.urdf.xacro's own comment for why both are needed.
     payload_mass_str = os.environ.get('FR3_PAYLOAD_MASS_KG', '0.0')
 
+    # Phase 4c: external end-effector force schedule, read once here and
+    # used for BOTH the MuJoCo injection node (force_mode/force_* params,
+    # unprefixed) and B3's own predictive handling (b3.force_* params,
+    # node-local prefix convention, not a ROS namespace) -- see
+    # fr3_dynamics/force_schedule.hpp for what each field means.
+    # FR3_FORCE_MODE="" (default) disables it entirely.
+    # FR3_FORCE_KNOWN_AT_PLAN_TIME gates ROUTE-level (Level 1/2/3) force
+    # awareness only -- the ONLINE path (B3ConstraintSolver) always
+    # predicts forward regardless, matching code/baselines.py::policy_b3's
+    # own always-sample-the-horizon behavior. "false" (default, Exp3): the
+    # route-level search stays force-blind even though the online path
+    # sees it. "true" (Exp4): route-level search sees it too.
+    force_mode = os.environ.get('FR3_FORCE_MODE', '')
+    force_t_onset = os.environ.get('FR3_FORCE_T_ONSET', '0.0')
+    force_ramp_duration = os.environ.get('FR3_FORCE_RAMP_DURATION', '1.0')
+    force_fx = os.environ.get('FR3_FORCE_FX', '0.0')
+    force_fy = os.environ.get('FR3_FORCE_FY', '0.0')
+    force_fz = os.environ.get('FR3_FORCE_FZ', '0.0')
+    force_contact_z = os.environ.get('FR3_FORCE_CONTACT_Z', '0.0')
+    force_k_contact = os.environ.get('FR3_FORCE_K_CONTACT', '0.0')
+    force_known_at_plan_time = os.environ.get('FR3_FORCE_KNOWN_AT_PLAN_TIME', 'false').strip().lower() == 'true'
+    b3_force_params = {
+        'b3.force_mode': force_mode,
+        'b3.force_t_onset': float(force_t_onset),
+        'b3.force_ramp_duration': float(force_ramp_duration),
+        'b3.force_fx': float(force_fx),
+        'b3.force_fy': float(force_fy),
+        'b3.force_fz': float(force_fz),
+        'b3.force_contact_z': float(force_contact_z),
+        'b3.force_k_contact': float(force_k_contact),
+        'b3.force_known_at_plan_time': force_known_at_plan_time,
+    }
+
     xacro_file = os.path.join(bringup_share, 'urdf', 'fr3_mujoco.urdf.xacro')
     robot_description_config = Command(
         [FindExecutable(name='xacro'), ' ', xacro_file, ' hand:=false',
@@ -125,6 +158,7 @@ def generate_launch_description():
                     common_hybrid_planning_param,
                     local_planner_param,
                     b3_params_param,
+                    b3_force_params,
                     robot_description,
                     robot_description_semantic,
                     kinematics_yaml,
@@ -164,6 +198,14 @@ def generate_launch_description():
             controller_config_file,
             {'mujoco_model_path': mujoco_model_path},
             {'payload_mass_kg': float(payload_mass_str)},
+            {'force_mode': force_mode},
+            {'force_t_onset': float(force_t_onset)},
+            {'force_ramp_duration': float(force_ramp_duration)},
+            {'force_fx': float(force_fx)},
+            {'force_fy': float(force_fy)},
+            {'force_fz': float(force_fz)},
+            {'force_contact_z': float(force_contact_z)},
+            {'force_k_contact': float(force_k_contact)},
         ],
     )
 

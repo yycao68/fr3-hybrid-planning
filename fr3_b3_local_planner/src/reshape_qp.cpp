@@ -37,7 +37,8 @@ std::optional<robot_trajectory::RobotTrajectory>
 tryReshape(const fr3_dynamics::FrankaChainDynamics& dynamics, const Eigen::VectorXd& tau_max,
            const Eigen::VectorXd& delta_tau, double qddot_box, double w_acc, double w_pos, double w_vel,
            const robot_trajectory::RobotTrajectory& nominal, const Eigen::VectorXd* terminal_q,
-           const Eigen::VectorXd* terminal_qdot)
+           const Eigen::VectorXd* terminal_qdot, const fr3_dynamics::ForceSchedule* force_schedule,
+           double force_t0)
 {
   const unsigned int num_joints = dynamics.numJoints();
   const int n = static_cast<int>(nominal.getWayPointCount());
@@ -81,6 +82,16 @@ tryReshape(const fr3_dynamics::FrankaChainDynamics& dynamics, const Eigen::Vecto
     if (!dynamics.computeDynamics(q_nom[j], qdot_nom[j], mass[j], bias[j]))
     {
       return std::nullopt;  // cannot linearize this step's torque constraint
+    }
+    if (force_schedule != nullptr)
+    {
+      // Phase 4c: fold -J(q)^T@F_ext into this step's own bias vector once,
+      // up front -- every constraint row below already uses bias[j], so
+      // this is the only change needed to make the whole QP force-aware.
+      const double t = force_t0 + nominal.getWayPointDurationFromStart(static_cast<std::size_t>(j));
+      const double ee_z = dynamics.computeTipPosition(q_nom[j]).z();
+      const Eigen::Vector3d f_ext = fr3_dynamics::sampleForceScheduleAt(*force_schedule, t, ee_z);
+      bias[j] -= dynamics.computeJacobian(q_nom[j]).transpose() * f_ext;
     }
   }
 

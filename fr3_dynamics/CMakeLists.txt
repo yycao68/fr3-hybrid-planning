@@ -24,6 +24,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
 
 add_library(fr3_dynamics SHARED
   src/franka_chain_dynamics.cpp
+  src/force_schedule.cpp
 )
 target_include_directories(fr3_dynamics PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

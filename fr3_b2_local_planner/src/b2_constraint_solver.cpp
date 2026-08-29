@@ -24,10 +24,10 @@ bool B2ConstraintSolver::initialize(const rclcpp::Node::SharedPtr& node,
   group_name_ = group_name;
 
   const std::string root_link = node_->declare_parameter<std::string>("b2.root_link", "fr3_link0");
-  const std::string tip_link = node_->declare_parameter<std::string>("b2.tip_link", "fr3_link8");
+  tip_link_ = node_->declare_parameter<std::string>("b2.tip_link", "fr3_link8");
   control_period_ = node_->declare_parameter<double>("b2.control_period", 0.01);
 
-  if (!dynamics_.initialize(node_, planning_scene_monitor_->getRobotModel(), group_name_, root_link, tip_link))
+  if (!dynamics_.initialize(node_, planning_scene_monitor_->getRobotModel(), group_name_, root_link, tip_link_))
   {
     RCLCPP_ERROR(LOGGER, "B2ConstraintSolver: fr3_dynamics initialization failed");
     return false;
@@ -50,6 +50,38 @@ bool B2ConstraintSolver::initialize(const rclcpp::Node::SharedPtr& node,
       return false;
     }
   }
+
+  // Phase 4c: external end-effector force schedule (see
+  // fr3_dynamics/force_schedule.hpp for what each field means). Empty
+  // b2.force_mode disables it entirely.
+  const std::string force_mode = node_->declare_parameter<std::string>("b2.force_mode", "");
+  if (force_mode == "ramp")
+  {
+    force_schedule_.mode = fr3_dynamics::ForceScheduleMode::kRamp;
+    force_schedule_enabled_ = true;
+  }
+  else if (force_mode == "spring")
+  {
+    force_schedule_.mode = fr3_dynamics::ForceScheduleMode::kSpring;
+    force_schedule_enabled_ = true;
+  }
+  force_schedule_.t_onset = node_->declare_parameter<double>("b2.force_t_onset", 0.0);
+  force_schedule_.ramp_duration = node_->declare_parameter<double>("b2.force_ramp_duration", 1.0);
+  force_schedule_.f_max = Eigen::Vector3d(node_->declare_parameter<double>("b2.force_fx", 0.0),
+                                           node_->declare_parameter<double>("b2.force_fy", 0.0),
+                                           node_->declare_parameter<double>("b2.force_fz", 0.0));
+  force_schedule_.contact_z = node_->declare_parameter<double>("b2.force_contact_z", 0.0);
+  force_schedule_.k_contact = node_->declare_parameter<double>("b2.force_k_contact", 0.0);
+  force_start_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
+      "/fr3_force_injection/start", rclcpp::QoS(1).transient_local(),
+      [this](const std_msgs::msg::Empty::SharedPtr /* msg */) {
+        force_started_ = true;
+        force_t0_sec_ = node_->now().seconds();
+        // scripts/exp3_interaction_force.py reads this to convert
+        // /diagnostics message timestamps into elapsed force-schedule
+        // time, matching ground_truth.py's own T_failure reference frame.
+        RCLCPP_INFO(LOGGER, "B2: force injection schedule started at t=%.4f", force_t0_sec_.load());
+      });
 
   diagnostics_pub_ = node_->create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
 
@@ -157,6 +189,19 @@ B2ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
   if (dynamics_ok)
   {
     Eigen::VectorXd tau_nominal = mass * qddot_nom + bias;
+    if (force_schedule_enabled_ && force_started_)
+    {
+      // Phase 4c: reactive, current-instant-only force handling (see
+      // header comment on force_schedule_) -- `t` is real elapsed time
+      // since the shared start signal, `ee_z` is this waypoint's own FK,
+      // matching code/dynamics.py::Arm.required_torque's
+      // `tau - J(q)^T @ F_ext` (mj_inverse/ChainDynParam do not fold an
+      // external wrench in on their own).
+      const double t = node_->now().seconds() - force_t0_sec_;
+      const double ee_z = next_state.getGlobalLinkTransform(tip_link_).translation().z();
+      const Eigen::Vector3d f_ext = fr3_dynamics::sampleForceScheduleAt(force_schedule_, t, ee_z);
+      tau_nominal -= dynamics_.computeJacobian(q_nom_kdl).transpose() * f_ext;
+    }
     min_margin_nm = (tau_max_ - tau_nominal.cwiseAbs()).minCoeff();
     bool exceeded = false;
     for (unsigned int i = 0; i < num_joints; ++i)

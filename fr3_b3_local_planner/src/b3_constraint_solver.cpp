@@ -63,6 +63,44 @@ bool B3ConstraintSolver::initialize(const rclcpp::Node::SharedPtr& node,
     return false;
   }
 
+  // Phase 4c: external end-effector force schedule -- shared b3.force_*
+  // params with HorizonTrajectoryOperator (same has_parameter guard
+  // pattern as b3.root_link/tip_link/dt above; HorizonTrajectoryOperator
+  // declares first, see its own initialize()).
+  const std::string force_mode = node_->has_parameter("b3.force_mode")
+                                      ? node_->get_parameter("b3.force_mode").as_string()
+                                      : node_->declare_parameter<std::string>("b3.force_mode", "");
+  if (force_mode == "ramp")
+  {
+    force_schedule_.mode = fr3_dynamics::ForceScheduleMode::kRamp;
+    force_schedule_enabled_ = true;
+  }
+  else if (force_mode == "spring")
+  {
+    force_schedule_.mode = fr3_dynamics::ForceScheduleMode::kSpring;
+    force_schedule_enabled_ = true;
+  }
+  auto get_force_param = [&](const std::string& name, double default_value) {
+    return node_->has_parameter(name) ? node_->get_parameter(name).as_double()
+                                       : node_->declare_parameter<double>(name, default_value);
+  };
+  force_schedule_.t_onset = get_force_param("b3.force_t_onset", 0.0);
+  force_schedule_.ramp_duration = get_force_param("b3.force_ramp_duration", 1.0);
+  force_schedule_.f_max = Eigen::Vector3d(get_force_param("b3.force_fx", 0.0), get_force_param("b3.force_fy", 0.0),
+                                           get_force_param("b3.force_fz", 0.0));
+  force_schedule_.contact_z = get_force_param("b3.force_contact_z", 0.0);
+  force_schedule_.k_contact = get_force_param("b3.force_k_contact", 0.0);
+  force_start_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
+      "/fr3_force_injection/start", rclcpp::QoS(1).transient_local(),
+      [this](const std_msgs::msg::Empty::SharedPtr /* msg */) {
+        force_started_ = true;
+        force_t0_sec_ = node_->now().seconds();
+        // scripts/exp3_interaction_force.py reads this to convert
+        // /diagnostics message timestamps into elapsed force-schedule
+        // time, matching ground_truth.py's own T_failure reference frame.
+        RCLCPP_INFO(LOGGER, "B3: force injection schedule started at t=%.4f", force_t0_sec_.load());
+      });
+
   const unsigned int num_joints = dynamics_.numJoints();
   tau_max_.resize(num_joints);
   for (unsigned int i = 0; i < num_joints; ++i)
@@ -151,8 +189,16 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
     return feedback_result;
   }
 
+  // Phase 4c: elapsed schedule time AS OF this cycle's t=0 -- each
+  // waypoint's own absolute time is this plus its own duration-from-start
+  // (computeMPhysOverTrajectory/tryReshape add that internally).
+  const fr3_dynamics::ForceSchedule* force_schedule = force_schedule_enabled_ ? &force_schedule_ : nullptr;
+  const double force_t_now =
+      (force_schedule_enabled_ && force_started_) ? (node_->now().seconds() - force_t0_sec_) : 0.0;
+
   int binding_step = -1;
-  const double m_phys = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, local_trajectory, binding_step);
+  const double m_phys = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, local_trajectory, binding_step,
+                                                     "horizon", force_schedule, force_t_now);
 
   bool used_reshape = false;
   double reshape_margin = 0.0;
@@ -167,11 +213,12 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
     // ever commanded, same one-step-per-cycle output shape Level 0/4
     // already use.
     reshaped = tryReshape(dynamics_, tau_max_, delta_tau_, qddot_box_, reshape_w_acc_, reshape_w_pos_,
-                           reshape_w_vel_, local_trajectory, nullptr, nullptr);
+                           reshape_w_vel_, local_trajectory, nullptr, nullptr, force_schedule, force_t_now);
     if (reshaped.has_value())
     {
       int reshaped_binding_step = -1;
-      reshape_margin = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reshaped, reshaped_binding_step);
+      reshape_margin = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reshaped, reshaped_binding_step,
+                                                    "horizon", force_schedule, force_t_now);
       used_reshape = reshape_margin >= m_safe_;
     }
     if (std::getenv("B3_DEBUG_HORIZON") != nullptr)

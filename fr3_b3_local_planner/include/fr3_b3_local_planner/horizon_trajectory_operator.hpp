@@ -8,13 +8,16 @@
 // does with the reference trajectory, not in how it tracks progress along it.
 #pragma once
 
+#include <atomic>
 #include <string>
 
 #include <rclcpp/rclcpp.hpp>
 #include <moveit/local_planner/trajectory_operator_interface.h>
 #include <moveit/trajectory_processing/time_optimal_trajectory_generation.h>
+#include <std_msgs/msg/empty.hpp>
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
+#include <fr3_dynamics/force_schedule.hpp>
 #include <fr3_b3_local_planner/reshape_qp.hpp>
 #include <fr3_b3_local_planner/via_point_trajectory.hpp>
 
@@ -90,6 +93,27 @@ private:
   // true no-op -- see via_point_trajectory.hpp.
   Eigen::VectorXd via_point_offset_;
   double via_t1_fraction_{ 0.5 };
+
+  // Phase 4c: external end-effector force, shared b3.force_* params with
+  // B3ConstraintSolver (same has_parameter guard pattern as b3.dt etc.
+  // above). b3.force_known_at_plan_time (NOT shared -- route-level only)
+  // is the entire Exp3-vs-Exp4 code-path difference: false (default, Exp3)
+  // means addTrajectorySegment's route-level search stays force-BLIND
+  // (nullptr passed below) even though the schedule itself is active
+  // online in B3ConstraintSolver; true (Exp4) lets the route-level search
+  // see it too, matching code/baselines.py's own
+  // `route_force_fn = ee_force_schedule if force_known_at_plan_time else None`.
+  fr3_dynamics::ForceSchedule force_schedule_;
+  bool force_schedule_enabled_{ false };
+  bool force_known_at_plan_time_{ false };
+  // Written from force_start_sub_'s callback, which the composable-node
+  // container's own multi-threaded executor may run on a different thread
+  // than addTrajectorySegment() -- atomic, not plain bool/rclcpp::Time, for
+  // that reason (same finding/fix as mujoco_ros2_control.cpp's own
+  // force_started_).
+  std::atomic<bool> force_started_{ false };
+  std::atomic<double> force_t0_sec_{ 0.0 };
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr force_start_sub_;
 };
 
 }  // namespace fr3_b3_local_planner

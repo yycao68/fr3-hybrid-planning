@@ -39,6 +39,31 @@ def generate_launch_description():
     # fr3_mujoco.urdf.xacro's own comment for why both are needed.
     payload_mass_str = os.environ.get('FR3_PAYLOAD_MASS_KG', '0.0')
 
+    # Phase 4c: external end-effector force schedule, read once here and
+    # used for BOTH the MuJoCo injection node (force_mode/force_* params,
+    # unprefixed) and B2's own reactive, current-instant-only handling
+    # (b2.force_* params, node-local prefix convention, not a ROS
+    # namespace) -- see fr3_dynamics/force_schedule.hpp for what each field
+    # means. FR3_FORCE_MODE="" (default) disables it entirely.
+    force_mode = os.environ.get('FR3_FORCE_MODE', '')
+    force_t_onset = os.environ.get('FR3_FORCE_T_ONSET', '0.0')
+    force_ramp_duration = os.environ.get('FR3_FORCE_RAMP_DURATION', '1.0')
+    force_fx = os.environ.get('FR3_FORCE_FX', '0.0')
+    force_fy = os.environ.get('FR3_FORCE_FY', '0.0')
+    force_fz = os.environ.get('FR3_FORCE_FZ', '0.0')
+    force_contact_z = os.environ.get('FR3_FORCE_CONTACT_Z', '0.0')
+    force_k_contact = os.environ.get('FR3_FORCE_K_CONTACT', '0.0')
+    b2_force_params = {
+        'b2.force_mode': force_mode,
+        'b2.force_t_onset': float(force_t_onset),
+        'b2.force_ramp_duration': float(force_ramp_duration),
+        'b2.force_fx': float(force_fx),
+        'b2.force_fy': float(force_fy),
+        'b2.force_fz': float(force_fz),
+        'b2.force_contact_z': float(force_contact_z),
+        'b2.force_k_contact': float(force_k_contact),
+    }
+
     xacro_file = os.path.join(bringup_share, 'urdf', 'fr3_mujoco.urdf.xacro')
     robot_description_config = Command(
         [FindExecutable(name='xacro'), ' ', xacro_file, ' hand:=false',
@@ -126,6 +151,7 @@ def generate_launch_description():
                     common_hybrid_planning_param,
                     local_planner_param,
                     b2_torque_limits_param,
+                    b2_force_params,
                     robot_description,
                     robot_description_semantic,
                     kinematics_yaml,
@@ -165,6 +191,14 @@ def generate_launch_description():
             controller_config_file,
             {'mujoco_model_path': mujoco_model_path},
             {'payload_mass_kg': float(payload_mass_str)},
+            {'force_mode': force_mode},
+            {'force_t_onset': float(force_t_onset)},
+            {'force_ramp_duration': float(force_ramp_duration)},
+            {'force_fx': float(force_fx)},
+            {'force_fy': float(force_fy)},
+            {'force_fz': float(force_fz)},
+            {'force_contact_z': float(force_contact_z)},
+            {'force_k_contact': float(force_k_contact)},
         ],
     )
 

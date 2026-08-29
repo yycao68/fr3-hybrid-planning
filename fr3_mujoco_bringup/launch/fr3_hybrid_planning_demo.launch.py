@@ -49,6 +49,22 @@ def generate_launch_description():
     # fr3_mujoco.urdf.xacro's own comment for why both are needed.
     payload_mass_str = os.environ.get('FR3_PAYLOAD_MASS_KG', '0.0')
 
+    # Phase 4c: external end-effector force schedule, read once here and
+    # used for the MuJoCo injection node's own force_mode/force_* params
+    # (unprefixed). B1 has no force-aware code at all (stock plugins, by
+    # design -- "B1 has no detection mechanism," code/experiments/
+    # exp3_interaction_force.py's own docstring) -- this only affects the
+    # SIMULATED physics B1 gets pushed around by, not any B1 decision.
+    # FR3_FORCE_MODE="" (default) disables it entirely.
+    force_mode = os.environ.get('FR3_FORCE_MODE', '')
+    force_t_onset = os.environ.get('FR3_FORCE_T_ONSET', '0.0')
+    force_ramp_duration = os.environ.get('FR3_FORCE_RAMP_DURATION', '1.0')
+    force_fx = os.environ.get('FR3_FORCE_FX', '0.0')
+    force_fy = os.environ.get('FR3_FORCE_FY', '0.0')
+    force_fz = os.environ.get('FR3_FORCE_FZ', '0.0')
+    force_contact_z = os.environ.get('FR3_FORCE_CONTACT_Z', '0.0')
+    force_k_contact = os.environ.get('FR3_FORCE_K_CONTACT', '0.0')
+
     xacro_file = os.path.join(bringup_share, 'urdf', 'fr3_mujoco.urdf.xacro')
     robot_description_config = Command(
         [FindExecutable(name='xacro'), ' ', xacro_file, ' hand:=false',
@@ -169,6 +185,14 @@ def generate_launch_description():
             controller_config_file,
             {'mujoco_model_path': mujoco_model_path},
             {'payload_mass_kg': float(payload_mass_str)},
+            {'force_mode': force_mode},
+            {'force_t_onset': float(force_t_onset)},
+            {'force_ramp_duration': float(force_ramp_duration)},
+            {'force_fx': float(force_fx)},
+            {'force_fy': float(force_fy)},
+            {'force_fz': float(force_fz)},
+            {'force_contact_z': float(force_contact_z)},
+            {'force_k_contact': float(force_k_contact)},
         ],
     )
 

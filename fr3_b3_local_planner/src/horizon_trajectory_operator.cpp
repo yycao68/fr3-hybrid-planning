@@ -1,6 +1,7 @@
 #include <fr3_b3_local_planner/horizon_trajectory_operator.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <optional>
 
 #include <fr3_b3_local_planner/route_retime_search.hpp>
@@ -100,6 +101,40 @@ bool HorizonTrajectoryOperator::initialize(const rclcpp::Node::SharedPtr& node,
   }
   via_t1_fraction_ = node_->declare_parameter<double>("b3.via_t1_fraction", 0.5);
 
+  // Phase 4c: external end-effector force schedule (see this class's own
+  // header comment for the force_known_at_plan_time gating this specific
+  // plugin owns).
+  const std::string force_mode = node_->has_parameter("b3.force_mode")
+                                      ? node_->get_parameter("b3.force_mode").as_string()
+                                      : node_->declare_parameter<std::string>("b3.force_mode", "");
+  if (force_mode == "ramp")
+  {
+    force_schedule_.mode = fr3_dynamics::ForceScheduleMode::kRamp;
+    force_schedule_enabled_ = true;
+  }
+  else if (force_mode == "spring")
+  {
+    force_schedule_.mode = fr3_dynamics::ForceScheduleMode::kSpring;
+    force_schedule_enabled_ = true;
+  }
+  auto get_force_param = [&](const std::string& pname, double default_value) {
+    return node_->has_parameter(pname) ? node_->get_parameter(pname).as_double()
+                                        : node_->declare_parameter<double>(pname, default_value);
+  };
+  force_schedule_.t_onset = get_force_param("b3.force_t_onset", 0.0);
+  force_schedule_.ramp_duration = get_force_param("b3.force_ramp_duration", 1.0);
+  force_schedule_.f_max = Eigen::Vector3d(get_force_param("b3.force_fx", 0.0), get_force_param("b3.force_fy", 0.0),
+                                           get_force_param("b3.force_fz", 0.0));
+  force_schedule_.contact_z = get_force_param("b3.force_contact_z", 0.0);
+  force_schedule_.k_contact = get_force_param("b3.force_k_contact", 0.0);
+  force_known_at_plan_time_ = node_->declare_parameter<bool>("b3.force_known_at_plan_time", false);
+  force_start_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
+      "/fr3_force_injection/start", rclcpp::QoS(1).transient_local(),
+      [this](const std_msgs::msg::Empty::SharedPtr /* msg */) {
+        force_started_ = true;
+        force_t0_sec_ = node_->now().seconds();
+      });
+
   reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(robot_model, group_name);
   current_duration_ = 0.0;
   return true;
@@ -119,9 +154,49 @@ HorizonTrajectoryOperator::addTrajectorySegment(const robot_trajectory::RobotTra
   // law into subsequent cycles would not actually slow the executed
   // motion down -- this is why the whole cascade lives here, once per
   // route, not online.
+  // Phase 4c: route-level force awareness, gated by force_known_at_plan_time
+  // (see this class's own header comment) -- nullptr here means every call
+  // below is a true no-op, exactly the pre-Phase-4c behavior.
+  const fr3_dynamics::ForceSchedule* force_schedule =
+      (force_schedule_enabled_ && force_known_at_plan_time_) ? &force_schedule_ : nullptr;
+  const double force_t_now =
+      (force_schedule != nullptr && force_started_) ? (node_->now().seconds() - force_t0_sec_) : 0.0;
   int binding_step = -1;
   const double m0 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reference_trajectory_, binding_step,
-                                                "whole-route");
+                                                "whole-route", force_schedule, force_t_now);
+
+  // Phase 4c, debug-only ground-truth probe (does NOT feed the real m0/
+  // Level 1-2-3 decision above -- a separate copy, purely so scripts/
+  // ground_truth.py has something to read): a short route's own single
+  // whole-route snapshot doesn't cover anywhere near enough time to see
+  // what a ramp-then-HELD force schedule eventually settles to -- the
+  // certificate's own online receding horizon keeps evaluating past route
+  // completion via getLocalTrajectory's "hold at terminal state"
+  // behavior, but even that horizon (15 steps * 0.02s = 0.3s by default)
+  // is shorter than a ramp can take to fully complete (confirmed live: a
+  // 0.5s ramp was still only ~85% complete at the online horizon's own
+  // edge). Extending much further (kExtensionSteps*dt_ = 3s by default,
+  // comfortably past any reasonable ramp_duration) lets this probe find
+  // the TRUE steady-state margin once the ramp fully completes and holds,
+  // matching what "would this ever actually fail" genuinely means.
+  if (force_schedule != nullptr && std::getenv("B3_DEBUG_HORIZON") != nullptr)
+  {
+    constexpr int kExtensionSteps = 150;
+    robot_trajectory::RobotTrajectory extended(*reference_trajectory_);
+    moveit::core::RobotState hold_state(reference_trajectory_->getWayPoint(reference_trajectory_->getWayPointCount() - 1));
+    std::vector<double> qdot_zero(dynamics_.numJoints(), 0.0);
+    hold_state.setJointGroupVelocities(joint_group_, qdot_zero);
+    hold_state.setJointGroupAccelerations(joint_group_, qdot_zero);
+    hold_state.update();
+    for (int k = 0; k < kExtensionSteps; ++k)
+    {
+      extended.addSuffixWayPoint(hold_state, dt_);
+    }
+    int extended_binding_step = -1;
+    computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, extended, extended_binding_step,
+                                "whole-route-extended", force_schedule, force_t_now);
+  }
+
   if (m0 >= m_safe_)
   {
     return moveit_msgs::action::LocalPlanner::Feedback();
@@ -130,14 +205,14 @@ HorizonTrajectoryOperator::addTrajectorySegment(const robot_trajectory::RobotTra
   bool fixed_by_1_or_2 = false;
 
   // Level 1 (retime).
-  const std::optional<double> lambda =
-      searchRetimeLambda(dynamics_, tau_max_, delta_tau_, m_safe_, lam_max_, *reference_trajectory_);
+  const std::optional<double> lambda = searchRetimeLambda(dynamics_, tau_max_, delta_tau_, m_safe_, lam_max_,
+                                                            *reference_trajectory_, force_schedule, force_t_now);
   if (lambda.has_value())
   {
     robot_trajectory::RobotTrajectory retimed = retimeTrajectory(*reference_trajectory_, lambda.value());
     int retimed_binding_step = -1;
-    const double m1 =
-        computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, retimed, retimed_binding_step, "whole-route");
+    const double m1 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, retimed, retimed_binding_step,
+                                                  "whole-route", force_schedule, force_t_now);
     reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(retimed);
     RCLCPP_INFO(LOGGER, "B3: Level 1 (retime) applied: lambda=%.3f, whole-route margin %.3f -> %.3f", lambda.value(),
                 m0, m1);
@@ -165,13 +240,12 @@ HorizonTrajectoryOperator::addTrajectorySegment(const robot_trajectory::RobotTra
 
     std::optional<robot_trajectory::RobotTrajectory> reshaped =
         tryReshape(dynamics_, tau_max_, delta_tau_, qddot_box_, reshape_w_acc_, reshape_w_pos_, reshape_w_vel_,
-                   *reference_trajectory_, &terminal_q, &terminal_qdot);
+                   *reference_trajectory_, &terminal_q, &terminal_qdot, force_schedule, force_t_now);
     if (reshaped.has_value())
     {
       int reshaped_binding_step = -1;
-      const double m2 =
-          computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reshaped, reshaped_binding_step,
-                                      "whole-route");
+      const double m2 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reshaped, reshaped_binding_step,
+                                                    "whole-route", force_schedule, force_t_now);
       if (m2 >= m_safe_)
       {
         reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(*reshaped);
@@ -227,7 +301,7 @@ HorizonTrajectoryOperator::addTrajectorySegment(const robot_trajectory::RobotTra
 
   int alt_binding_step = -1;
   const double mb = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, alt, alt_binding_step,
-                                                "whole-route");
+                                                "whole-route", force_schedule, force_t_now);
   RCLCPP_INFO(LOGGER, "B3: Level 3 (reroute) candidate whole-route margin (sub-level 0, vs. primary's %.3f): %.3f",
               m0, mb);
   if (mb >= m_safe_)
@@ -238,7 +312,8 @@ HorizonTrajectoryOperator::addTrajectorySegment(const robot_trajectory::RobotTra
     return moveit_msgs::action::LocalPlanner::Feedback();
   }
 
-  const std::optional<double> lambda_b = searchRetimeLambda(dynamics_, tau_max_, delta_tau_, m_safe_, lam_max_, alt);
+  const std::optional<double> lambda_b =
+      searchRetimeLambda(dynamics_, tau_max_, delta_tau_, m_safe_, lam_max_, alt, force_schedule, force_t_now);
   if (!lambda_b.has_value())
   {
     RCLCPP_INFO(LOGGER, "B3: Level 3 (reroute) sub-level 1 (retime) exhausted on candidate; trying sub-level 2");
@@ -247,7 +322,8 @@ HorizonTrajectoryOperator::addTrajectorySegment(const robot_trajectory::RobotTra
   {
     robot_trajectory::RobotTrajectory alt_retimed = retimeTrajectory(alt, lambda_b.value());
     int b1 = -1;
-    const double mb1 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, alt_retimed, b1, "whole-route");
+    const double mb1 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, alt_retimed, b1, "whole-route",
+                                                    force_schedule, force_t_now);
     reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(alt_retimed);
     RCLCPP_INFO(LOGGER,
                 "B3: Level 3 (reroute) applied at sub-level 1 (retimed via-point route): lambda=%.3f, "
@@ -260,11 +336,12 @@ HorizonTrajectoryOperator::addTrajectorySegment(const robot_trajectory::RobotTra
   Eigen::VectorXd alt_terminal_qdot = Eigen::VectorXd::Zero(qf.size());
   std::optional<robot_trajectory::RobotTrajectory> alt_reshaped =
       tryReshape(dynamics_, tau_max_, delta_tau_, qddot_box_, reshape_w_acc_, reshape_w_pos_, reshape_w_vel_, alt,
-                 &alt_terminal_q, &alt_terminal_qdot);
+                 &alt_terminal_q, &alt_terminal_qdot, force_schedule, force_t_now);
   if (alt_reshaped.has_value())
   {
     int b2 = -1;
-    const double mb2 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *alt_reshaped, b2, "whole-route");
+    const double mb2 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *alt_reshaped, b2, "whole-route",
+                                                    force_schedule, force_t_now);
     if (mb2 >= m_safe_)
     {
       reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(*alt_reshaped);

@@ -16,14 +16,17 @@
 // current instant, not just react once it's already happened.
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 #include <moveit/local_planner/local_constraint_solver_interface.h>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <std_msgs/msg/empty.hpp>
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
+#include <fr3_dynamics/force_schedule.hpp>
 #include <fr3_b3_local_planner/torque_margin_certificate.hpp>
 #include <fr3_b3_local_planner/reshape_qp.hpp>
 
@@ -81,6 +84,22 @@ private:
   // Phase 4a: per-cycle observability -- see B2's own header comment for
   // why this is unconditional (Level 0 pass-through has no log line today).
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
+
+  // Phase 4c: external end-effector force, predicted FORWARD over the
+  // whole online horizon (unlike B2's current-instant-only sampling) --
+  // code/baselines.py::policy_b3 always samples ee_force_schedule over its
+  // bounded online horizon regardless of force_known_at_plan_time (that
+  // flag only gates ROUTE-level use, in HorizonTrajectoryOperator).
+  // b3.force_mode == "" (default) disables this entirely.
+  fr3_dynamics::ForceSchedule force_schedule_;
+  bool force_schedule_enabled_{ false };
+  // Written from force_start_sub_'s callback, which the composable-node
+  // container's own multi-threaded executor may run on a different thread
+  // than solve() -- atomic, not plain bool/rclcpp::Time, for that reason
+  // (same finding/fix as mujoco_ros2_control.cpp's own force_started_).
+  std::atomic<bool> force_started_{ false };
+  std::atomic<double> force_t0_sec_{ 0.0 };
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr force_start_sub_;
 };
 
 }  // namespace fr3_b3_local_planner

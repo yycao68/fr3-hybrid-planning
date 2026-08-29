@@ -8,6 +8,7 @@
 #include <moveit/robot_trajectory/robot_trajectory.h>
 
 #include <fr3_dynamics/franka_chain_dynamics.hpp>
+#include <fr3_dynamics/force_schedule.hpp>
 
 namespace fr3_b3_local_planner
 {
@@ -32,9 +33,18 @@ robot_trajectory::RobotTrajectory retimeTrajectory(const robot_trajectory::Robot
 // genuinely non-monotonic (interior maximum) when a joint's inertial/
 // Coriolis torque partially opposes its gravity/external-force torque.
 // Returns std::nullopt if even the dense scan cannot restore the margin.
+//
+// Phase 4c: `force_schedule` (default nullptr, a true no-op) is forwarded
+// into every internal computeMPhysOverTrajectory call, so each candidate
+// lambda's margin already accounts for the external force at that
+// candidate's own (lambda-scaled) absolute times. `force_known_at_plan_time`
+// gating (Exp3 vs Exp4) happens at the caller, not here -- this function is
+// unconditionally force-aware whenever a non-null schedule reaches it.
 std::optional<double> searchRetimeLambda(const fr3_dynamics::FrankaChainDynamics& dynamics,
                                           const Eigen::VectorXd& tau_max, const Eigen::VectorXd& delta_tau,
                                           double m_safe, double lam_max,
-                                          const robot_trajectory::RobotTrajectory& traj);
+                                          const robot_trajectory::RobotTrajectory& traj,
+                                          const fr3_dynamics::ForceSchedule* force_schedule = nullptr,
+                                          double force_t0 = 0.0);
 
 }  // namespace fr3_b3_local_planner

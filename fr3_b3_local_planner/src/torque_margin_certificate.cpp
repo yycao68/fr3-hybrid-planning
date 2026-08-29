@@ -18,7 +18,8 @@ const rclcpp::Logger LOGGER = rclcpp::get_logger("local_planner_component");
 double computeMPhysOverTrajectory(const fr3_dynamics::FrankaChainDynamics& dynamics,
                                    const Eigen::VectorXd& tau_max, const Eigen::VectorXd& delta_tau,
                                    const robot_trajectory::RobotTrajectory& trajectory, int& binding_step,
-                                   const char* log_tag)
+                                   const char* log_tag, const fr3_dynamics::ForceSchedule* force_schedule,
+                                   double force_t0)
 {
   const unsigned int num_joints = dynamics.numJoints();
   const moveit::core::JointModelGroup* jmg = trajectory.getGroup();
@@ -63,6 +64,34 @@ double computeMPhysOverTrajectory(const fr3_dynamics::FrankaChainDynamics& dynam
       continue;  // skip this step's contribution rather than fail the whole trajectory
     }
     Eigen::VectorXd tau = mass * qddot + bias;
+    // Phase 4c: this waypoint's own absolute schedule time -- NOT j*some
+    // fixed dt (the whole-route trajectory this function also serves,
+    // HorizonTrajectoryOperator's reference_trajectory_, has whatever
+    // non-uniform waypoint spacing OMPL + time parameterization produced,
+    // not B3's own uniform b3.dt online-horizon spacing; confirmed live,
+    // scripts/ground_truth.py originally assumed a fixed dt here and
+    // silently mis-timed every waypoint on the route path). Computed
+    // (and logged, when debugging) unconditionally, not just when
+    // force_schedule is active, since scripts/ground_truth.py needs the
+    // real per-waypoint time regardless.
+    const double t = force_t0 + trajectory.getWayPointDurationFromStart(j);
+    // Computed whenever force-aware OR being logged (e.g. to tune a real
+    // contact_z against real EE trajectories before any force_schedule is
+    // even configured) -- skipped otherwise, since it's a real FK solve
+    // on the hot online-per-cycle path.
+    double ee_z = std::numeric_limits<double>::quiet_NaN();
+    if (force_schedule != nullptr || debug)
+    {
+      ee_z = dynamics.computeTipPosition(q_kdl).z();
+    }
+    if (force_schedule != nullptr)
+    {
+      // Fold in this waypoint's own external force, at its own absolute
+      // schedule time and its own FK tip position -- matches
+      // code/dynamics.py::Arm.required_torque's tau - J(q)^T@F_ext.
+      const Eigen::Vector3d f_ext = fr3_dynamics::sampleForceScheduleAt(*force_schedule, t, ee_z);
+      tau -= dynamics.computeJacobian(q_kdl).transpose() * f_ext;
+    }
     double step_min = std::numeric_limits<double>::infinity();
     for (unsigned int i = 0; i < num_joints; ++i)
     {
@@ -76,7 +105,8 @@ double computeMPhysOverTrajectory(const fr3_dynamics::FrankaChainDynamics& dynam
     }
     if (debug)
     {
-      RCLCPP_INFO(LOGGER, "B3 debug [%s]: step %zu step_min_margin=%.4f", log_tag, j, step_min);
+      RCLCPP_INFO(LOGGER, "B3 debug [%s]: step %zu t=%.4f ee_z=%.4f step_min_margin=%.4f", log_tag, j, t, ee_z,
+                  step_min);
     }
   }
   return m_phys;

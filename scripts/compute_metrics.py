@@ -75,10 +75,15 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
     _, last_js = joint_states[-1]
     final_positions = dict(zip(last_js.name, last_js.position))
 
-    err_sq = 0.0
-    for name, goal_val in goal_targets.items():
-        if name in final_positions:
-            err_sq += (final_positions[name] - goal_val) ** 2
+    # Reject incomplete joint states rather than silently scoring only the
+    # joints that happen to be present -- a missing joint would otherwise
+    # DROP OUT of the L2 sum entirely, understating error and potentially
+    # producing a false task_success (external review finding, confirmed
+    # real: verified this file previously had no such check).
+    missing = set(goal_targets) - set(final_positions)
+    if missing:
+        raise RuntimeError(f"missing goal joints in final /joint_states: {sorted(missing)}")
+    err_sq = sum((final_positions[name] - goal_val) ** 2 for name, goal_val in goal_targets.items())
     final_pos_error_rad = err_sq ** 0.5
     task_success = final_pos_error_rad <= POS_TOL_RAD
 
@@ -100,8 +105,17 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
     log(f"duration_s: {duration_s:.3f}")
 
     diag_msgs = messages.get("/diagnostics", [])
-    if diag_msgs:
-        controller_name = diag_msgs[0][1].status[0].name
+    # Explicitly search for one of the two controllers THIS platform ever
+    # publishes /diagnostics for, rather than trusting the first message's
+    # first status entry to be the right one (external review finding,
+    # confirmed real: a different diagnostic publisher appearing first on
+    # the topic would have silently mis-assigned or dropped every metric).
+    controller_name = next(
+        (status.name for _, msg in diag_msgs for status in msg.status
+         if status.name in ("b2_constraint_solver", "b3_constraint_solver")),
+        None,
+    )
+    if controller_name:
         margins = []
         intervention_count = 0
         for _, msg in diag_msgs:
