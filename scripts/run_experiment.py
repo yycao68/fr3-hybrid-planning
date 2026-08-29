@@ -43,20 +43,58 @@ from moveit_msgs.msg import (
     MotionSequenceRequest, MotionSequenceItem,
 )
 
+# Review finding (pattern broadness): `pkill -9 -f` matches ANY process
+# on the machine whose full command line contains the substring, not just
+# ones this project spawned -- confirmed live via `ps aux` during an
+# active launch: some of the ORIGINAL substrings here ("component_container",
+# "robot_state_publisher", "ros2 launch") match through fully GENERIC
+# binary paths shared by every ROS 2 install on the machine
+# (e.g. .../lib/robot_state_publisher/robot_state_publisher, invoked with
+# no project-specific args at all), so running this alongside an unrelated
+# ROS 2 project could kill IT, not just this platform's own processes.
+# `run_one()`'s own launch_proc is now torn down precisely by PID/process-
+# group (see its own comment) for the normal (non-crashed) path, so this
+# pattern is now mainly a FALLBACK for orphans left by a run that died
+# without its own Python process surviving to call that teardown (e.g.
+# Ctrl-C, a crash) -- narrowed as far as real `ps` output allows:
+#   - "ros2 launch fr3_mujoco_bringup" (not bare "ros2 launch") -- every
+#     launch this project starts has this exact substring in its own argv
+#     (confirmed live), so this is a strict narrowing with zero coverage
+#     loss for us.
+#   - "hybrid_planning_container" (not bare "component_container" or
+#     "hybrid_planning") -- all three launch files name their composable-
+#     node container exactly this (confirmed in each file), and
+#     component_container_mt's own argv carries it via `-r
+#     __node:=hybrid_planning_container` even though its binary path
+#     itself is the generic shared one.
+#   - "mujoco_ros2_control" -- already workspace-specific enough (its own
+#     argv resolves through this workspace's own install/ prefix, not a
+#     shared conda-env path).
+#   - "robot_state_publisher"/"ros2_control_node" -- COULD NOT be
+#     narrowed the same way: both run from generic shared conda-env
+#     binaries with no project-specific args or node-name override in any
+#     of this platform's launch files, so these two terms still carry the
+#     residual, disclosed risk of matching an unrelated ROS 2 project's
+#     own same-named node if one happens to be running at the same time.
+#   - "daemonize" is deliberately kept broad -- see the leak-fix comment
+#     preserved below, that breadth is the actual fix, not a bug.
+#
 # Phase 4b finding: "ros2 control load_controller" (used by every launch
 # file here) auto-spawns a per-ROS_DOMAIN_ID "ros2cli.daemon.daemonize"
 # background process (ros2cli/daemon/__init__.py) that holds its own live
 # rclpy node/DDS participant open for up to 2 hours of inactivity before
-# self-shutting-down. Since run_one() picks a fresh random domain ID every
-# call, a long sweep (many run_one calls in a row, e.g. exp2_payload_sweep.py)
-# leaks one of these per call -- confirmed live: a real sweep run left 25+
-# stray daemons running, and the DDS transport wedged solid (every UDP write
+# self-shutting-down, and -- being a genuine daemon -- detaches from its
+# own parent's process group, so PID/process-group-based teardown can't
+# reach it even for a run that tore down cleanly otherwise. Since
+# run_one() picks a fresh random domain ID every call, a long sweep leaks
+# one of these per call -- confirmed live: a real sweep run left 25+ stray
+# daemons running, and the DDS transport wedged solid (every UDP write
 # failing, one cell hanging indefinitely with no error) once enough had
 # piled up. Matching "daemonize" here means every run_one() call reaps ALL
 # accumulated stragglers, not just its own, so they can never build up.
 PKILL_PATTERN = (
-    "hybrid_planning|component_container|mujoco_ros2_control|"
-    "robot_state_publisher|ros2_control_node|ros2 launch|daemonize"
+    "ros2 launch fr3_mujoco_bringup|hybrid_planning_container|mujoco_ros2_control|"
+    "robot_state_publisher|ros2_control_node|daemonize"
 )
 READY_LINE = "Successfully loaded controller fr3_arm_controller into state active"
 
@@ -124,8 +162,30 @@ GOALS = {
 
 
 def pkill_stragglers():
+    """Fallback net for orphans (see PKILL_PATTERN's own comment for why
+    this is narrower than it used to be, and its disclosed residual risk).
+    Still called before every launch (there is no PID to precisely target
+    a PREVIOUS, possibly-crashed run's own leftovers) and as a fallback
+    if wait_ready() times out."""
     subprocess.run(["pkill", "-9", "-f", PKILL_PATTERN], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
+
+
+def kill_launch_tree(launch_proc: subprocess.Popen):
+    """Precisely tears down THIS run's own launch and everything it
+    spawned (component_container_mt, mujoco_ros2_control,
+    robot_state_publisher, ros2_control_node) via its process GROUP, not
+    string matching -- launch_proc is started with start_new_session=True
+    (its own new process group, pgid == its own pid), so every child it
+    forks inherits that same pgid unless it deliberately detaches (the
+    ros2cli daemon does; see PKILL_PATTERN's own comment for why that one
+    still needs the broader fallback). This is what makes the NORMAL
+    (non-crashed) teardown path no longer depend on PKILL_PATTERN's own
+    string-matching risk at all."""
+    try:
+        os.killpg(os.getpgid(launch_proc.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # already gone
 
 
 def wait_ready(log_path: str, timeout_s: float = 15.0) -> bool:
@@ -268,11 +328,12 @@ def run_one(launch_file: str, bag_dir: str, extra_env: dict = None, goal: str = 
         launch_proc = subprocess.Popen(
             ["ros2", "launch", "fr3_mujoco_bringup", launch_file],
             stdout=launch_log, stderr=subprocess.STDOUT, env=env,
+            start_new_session=True,  # own process group, see kill_launch_tree()
         )
 
     log(f"Launched (domain {domain_id}, pid {launch_proc.pid}), polling for readiness...")
     if not wait_ready(launch_log_path):
-        launch_proc.terminate()
+        kill_launch_tree(launch_proc)
         pkill_stragglers()
         raise RuntimeError(f"never became ready (see {launch_log_path})")
 
@@ -306,7 +367,7 @@ def run_one(launch_file: str, bag_dir: str, extra_env: dict = None, goal: str = 
             bag_proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             bag_proc.kill()
-        launch_proc.terminate()
+        kill_launch_tree(launch_proc)
         pkill_stragglers()
 
     log(f"Bag written to {bag_dir}")
