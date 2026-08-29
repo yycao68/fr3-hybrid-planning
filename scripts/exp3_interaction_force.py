@@ -23,6 +23,7 @@ import sys
 from run_experiment import run_one
 from compute_metrics import compute, read_bag
 from ground_truth import ground_truth_failure_time
+from capture_trajectory import capture_nominal_trajectory
 
 LAUNCH_FILES = {
     "B1": "fr3_hybrid_planning_demo.launch.py",
@@ -88,11 +89,11 @@ def first_detection_time(bag_dir, force_t0):
     return None
 
 
-def run_cell(name, launch_file):
+def run_cell(name, launch_file, extra_env):
     bag_dir = f"{BAG_ROOT}/{name}"
     launch_log = bag_dir + "_launch.log"
     try:
-        run_one(launch_file, bag_dir, extra_env=FORCE_ENV, goal=GOAL, goal_timeout=30.0, quiet=True)
+        run_one(launch_file, bag_dir, extra_env=extra_env, goal=GOAL, goal_timeout=30.0, quiet=True)
         m = compute(bag_dir, goal=GOAL, quiet=True)
     except RuntimeError as e:
         # Includes mujoco_ros2_control's known pre-existing spontaneous
@@ -107,14 +108,14 @@ def run_cell(name, launch_file):
     return m
 
 
-def run_ground_truth():
+def run_ground_truth(extra_env):
     """A separate B3 run with force_known_at_plan_time=true, purely so the
     whole-route certificate evaluation (HorizonTrajectoryOperator::
     addTrajectorySegment's own m0) folds the force in -- see
     ground_truth.py's own header comment. This run's actual online
     behavior (whether B3 intervenes) is irrelevant and unused; only the
     FIRST "[whole-route]" B3_DEBUG_HORIZON log batch is read."""
-    env = dict(FORCE_ENV)
+    env = dict(extra_env)
     env["FR3_FORCE_KNOWN_AT_PLAN_TIME"] = "true"
     env["B3_DEBUG_HORIZON"] = "1"
     # mujoco_ros2_control's known pre-existing spontaneous crash window
@@ -137,15 +138,31 @@ def main():
         shutil.rmtree(BAG_ROOT)
     os.makedirs(BAG_ROOT)
 
+    # Determinism fix (external review, Critical finding): every run below
+    # used to trigger its OWN fresh, randomized/unseeded OMPL plan, so
+    # nothing guaranteed B1/B2/B3/ground-truth actually shared the
+    # "identical geometric trajectory, geometric path and time law held
+    # fixed" the paper's own framing requires. Plan ONCE for real here
+    # (force-blind -- OMPL's own geometric search doesn't depend on
+    # force/payload at all) and replay that captured plan verbatim for
+    # every cell below -- see fr3_replay_global_planner's own header
+    # comment for why this is architecturally clean, not a hack.
+    nominal_path = f"{BAG_ROOT}_nominal_trajectory.bin"
+    print("Capturing one real OMPL trajectory for deterministic replay across B1/B2/B3/ground-truth...")
+    capture_nominal_trajectory(GOAL, nominal_path)
+    replay_env = dict(FORCE_ENV)
+    replay_env["FR3_GLOBAL_PLANNER_YAML"] = "config/hybrid_planning/global_planner_replay.yaml"
+    replay_env["FR3_REPLAY_TRAJECTORY_PATH"] = nominal_path
+
     print("Running ground-truth (force_known_at_plan_time=true, unused online behavior)...")
-    t_failure = run_ground_truth()
+    t_failure = run_ground_truth(replay_env)
     print(f"Ground-truth failure time (unmodified nominal route): "
           f"{t_failure if t_failure is not None else 'never'} s")
 
     results = {}
     for name, launch_file in LAUNCH_FILES.items():
         print(f"Running {name}...")
-        results[name] = run_cell(name, launch_file)
+        results[name] = run_cell(name, launch_file, replay_env)
 
     print()
     print(f"{'baseline':>8} | {'success':>8} | {'t_detect':>9} | {'T_warning':>10}")

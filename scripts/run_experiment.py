@@ -277,7 +277,8 @@ def run_one(launch_file: str, bag_dir: str, extra_env: dict = None, goal: str = 
         raise RuntimeError(f"never became ready (see {launch_log_path})")
 
     bag_proc = subprocess.Popen(
-        ["ros2", "bag", "record", "-o", bag_dir, "/joint_states", "/diagnostics", "/rosout"],
+        ["ros2", "bag", "record", "-o", bag_dir,
+         "/joint_states", "/diagnostics", "/rosout", "/global_trajectory"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
     )
     try:

@@ -1,0 +1,9 @@
+# Phase 4c-fix: selects fr3_replay_global_planner/ReplayGlobalPlanner
+# instead of the real OMPL pipeline (global_planner.yaml's own default) --
+# see that plugin's own header comment for why. replay_trajectory_path is
+# always overridden at launch time via FR3_REPLAY_TRAJECTORY_PATH (same
+# pattern as FR3_B3_PARAMS_YAML etc.); the empty default here makes a
+# misconfigured launch fail loudly (the plugin's own initialize() refuses
+# an empty path) rather than silently doing something unintended.
+global_planner_name: "fr3_replay_global_planner/ReplayGlobalPlanner"
+replay_trajectory_path: ""

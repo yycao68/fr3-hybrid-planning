@@ -24,6 +24,7 @@ import sys
 
 from run_experiment import run_one
 from compute_metrics import compute
+from capture_trajectory import capture_nominal_trajectory
 
 LAUNCH_FILES = {
     "B1": "fr3_hybrid_planning_demo.launch.py",
@@ -35,10 +36,12 @@ DEFAULT_PAYLOADS = [0.0, 3.0, 5.0, 6.0, 7.0, 8.0, 10.0]
 BAG_ROOT = "/tmp/exp2_sweep"
 
 
-def run_cell(name, launch_file, payload):
+def run_cell(name, launch_file, payload, replay_env):
     bag_dir = f"{BAG_ROOT}/{name}_{payload}"
     try:
-        run_one(launch_file, bag_dir, extra_env={"FR3_PAYLOAD_MASS_KG": str(payload)},
+        env = dict(replay_env)
+        env["FR3_PAYLOAD_MASS_KG"] = str(payload)
+        run_one(launch_file, bag_dir, extra_env=env,
                 goal="large", goal_timeout=45.0, quiet=True)
         return compute(bag_dir, goal="large", quiet=True)
     except RuntimeError as e:
@@ -54,13 +57,30 @@ def main():
         shutil.rmtree(BAG_ROOT)
     os.makedirs(BAG_ROOT)
 
+    # Determinism fix (external review, Critical finding): every cell below
+    # used to trigger its OWN fresh, randomized/unseeded OMPL plan, so
+    # nothing guaranteed the geometric trajectory + time law actually
+    # stayed fixed as payload varied -- exactly what the paper's own
+    # "identical geometric trajectory... held fixed" framing requires.
+    # Plan ONCE for real here (OMPL's own geometric search doesn't depend
+    # on payload at all) and replay that captured plan verbatim for every
+    # cell below -- see fr3_replay_global_planner's own header comment.
+    nominal_path = f"{BAG_ROOT}_nominal_trajectory.bin"
+    print("Capturing one real OMPL trajectory for deterministic replay across the sweep...")
+    capture_nominal_trajectory("large", nominal_path)
+    replay_env = {
+        "FR3_GLOBAL_PLANNER_YAML": "config/hybrid_planning/global_planner_replay.yaml",
+        "FR3_REPLAY_TRAJECTORY_PATH": nominal_path,
+    }
+
     first_violation = {"B1": None, "B2": None}
     first_b3_trigger = None
 
     print(f"{'payload':>8} | {'B1 succ':>8} | {'B2 interv':>10} {'B2 succ':>8} | "
           f"{'B3 interv':>10} {'B3 route':>9} {'B3 succ':>8} {'min_margin':>11}")
     for payload in payloads:
-        row = {name: run_cell(name, launch_file, payload) for name, launch_file in LAUNCH_FILES.items()}
+        row = {name: run_cell(name, launch_file, payload, replay_env)
+               for name, launch_file in LAUNCH_FILES.items()}
 
         if first_violation["B1"] is None and row["B1"]["task_success"] is False:
             first_violation["B1"] = payload

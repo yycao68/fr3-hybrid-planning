@@ -115,8 +115,17 @@ def generate_launch_description():
 
     common_hybrid_planning_param = load_yaml(
         'fr3_mujoco_bringup', 'config/hybrid_planning/common_hybrid_planning_params.yaml')
-    global_planner_param = load_yaml(
-        'fr3_mujoco_bringup', 'config/hybrid_planning/global_planner.yaml')
+    # Phase 4c-fix: deterministic trajectory replay (see
+    # fr3_replay_global_planner's own header comment for why) -- default
+    # (both env vars unset) leaves real OMPL planning unchanged;
+    # exp2/exp3's sweeps set both so every cell/baseline replays one
+    # captured trajectory instead of re-planning.
+    global_planner_yaml = os.environ.get(
+        'FR3_GLOBAL_PLANNER_YAML', 'config/hybrid_planning/global_planner.yaml')
+    global_planner_param = load_yaml('fr3_mujoco_bringup', global_planner_yaml)
+    replay_trajectory_path = os.environ.get('FR3_REPLAY_TRAJECTORY_PATH', '')
+    if replay_trajectory_path:
+        global_planner_param['replay_trajectory_path'] = replay_trajectory_path
     local_planner_param = load_yaml(
         'fr3_mujoco_bringup', 'config/hybrid_planning/local_planner_b3.yaml')
     hybrid_planning_manager_param = load_yaml(

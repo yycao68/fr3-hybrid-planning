@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>fr3_replay_global_planner</name>
+  <version>0.1.0</version>
+  <description>
+    Phase 4c-fix: a MoveIt 2 Hybrid Planning GlobalPlannerInterface plugin
+    that replays one captured real MotionPlanResponse verbatim instead of
+    calling OMPL, so an experiment sweep can hold the geometric trajectory
+    and time law fixed across cells/baselines -- fixes a real
+    experimental-validity gap found by an independent external review.
+  </description>
+  <maintainer email="dev@example.com">replan</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>moveit_hybrid_planning</depend>
+  <depend>moveit_msgs</depend>
+  <depend>pluginlib</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+    <moveit_hybrid_planning plugin="${prefix}/replay_global_planner_plugin.xml"/>
+  </export>
+</package>

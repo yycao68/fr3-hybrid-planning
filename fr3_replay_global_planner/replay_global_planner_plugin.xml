@@ -1,0 +1,11 @@
+<library path="replay_global_planner_plugin">
+  <class name="fr3_replay_global_planner/ReplayGlobalPlanner" type="fr3_replay_global_planner::ReplayGlobalPlanner" base_class_type="moveit::hybrid_planning::GlobalPlannerInterface">
+    <description>
+    Phase 4c-fix: replays one captured real MotionPlanResponse verbatim
+    instead of calling OMPL, so a sweep can hold the geometric trajectory
+    and time law fixed across cells/baselines while only payload/force/
+    controller varies. See scripts/capture_trajectory.py for how the
+    replayed file is produced.
+    </description>
+  </class>
+</library>
