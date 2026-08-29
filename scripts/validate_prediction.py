@@ -25,6 +25,24 @@ import sys
 from compute_metrics import read_bag
 
 
+def compute_summary(results):
+    """RMSE/MAE/mean/max-abs error over a list of per-prediction dicts
+    from validate_predictions() -- external review's own suggested
+    reporting set for treating this as a real experiment result, not
+    just a per-run table. All fields None if results is empty."""
+    if not results:
+        return {"mean_error": None, "mae": None, "rmse": None, "max_abs_error": None, "n": 0}
+    errors = [r["error"] for r in results]
+    n = len(errors)
+    return {
+        "n": n,
+        "mean_error": sum(errors) / n,
+        "mae": sum(abs(e) for e in errors) / n,
+        "rmse": (sum(e * e for e in errors) / n) ** 0.5,
+        "max_abs_error": max(abs(e) for e in errors),
+    }
+
+
 def validate_predictions(bag_dir: str, dt: float = 0.02, quiet: bool = False):
     """Returns a list of per-prediction dicts (t_predict_s, horizon_s,
     predicted, observed, error, alignment_gap_s), one per B3 diagnostics
@@ -82,11 +100,10 @@ def validate_predictions(bag_dir: str, dt: float = 0.02, quiet: bool = False):
             "the certificate's own worst-case point never fell more than 0 steps ahead in this run.")
         return results
 
-    errors = [r["error"] for r in results]
-    mean_err = sum(errors) / len(errors)
-    max_abs_err = max(abs(e) for e in errors)
-    log(f"{len(results)} predictions validated "
-        f"(mean_error={mean_err:+.4f} N*m, max_abs_error={max_abs_err:.4f} N*m)")
+    summary = compute_summary(results)
+    log(f"{summary['n']} predictions validated -- "
+        f"RMSE={summary['rmse']:.4f} N*m, MAE={summary['mae']:.4f} N*m, "
+        f"mean_error={summary['mean_error']:+.4f} N*m, max_abs_error={summary['max_abs_error']:.4f} N*m")
     log(f"{'t_predict_s':>12} {'horizon_s':>10} {'predicted':>10} {'observed':>10} {'error':>8}")
     for r in results:
         log(f"{r['t_predict_s']:12.3f} {r['horizon_s']:10.3f} {r['predicted']:10.4f} "

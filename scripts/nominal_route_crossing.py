@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
-"""Phase 4c: ground-truth failure/contact-transition time, ported from
+"""Phase 4c: nominal-route constraint-crossing time, ported from
 code/experiments/exp3_interaction_force.py::ground_truth_failure_time.
+Renamed from this module's own earlier name (ground_truth.py) and this
+function's own earlier name (ground_truth_failure_time) -- external
+review finding: what this actually computes is B3's OWN certificate
+model, re-evaluated offline on the unmodified nominal route. It is a
+model-predicted constraint-crossing time, not independent ground truth
+(no independent physics/sensor is involved) -- calling it "ground truth"
+in a paper would risk reading as validating the certificate against
+itself. This is a faithful port of the Python reference's own
+`ground_truth_failure_time`/`Certificate.ground_truth_violation`
+methodology (confirmed by reading it), so the port itself isn't a
+shortcut -- only the NAME overclaimed what the number means.
+
 The Python reference samples the UNMODIFIED nominal trajectory directly
 (closed-form JointTrajectory); this platform's trajectories come from
 OMPL + time parameterization instead, so rather than duplicating that
@@ -55,10 +67,12 @@ def first_whole_route_margins(launch_log_path):
     return margins
 
 
-def ground_truth_failure_time(launch_log_path):
+def nominal_route_constraint_crossing_time(launch_log_path):
     """First absolute force-schedule time at which the certificate's own
     step_min_margin goes negative (|tau| > tau_max - delta_tau) along the
-    UNMODIFIED nominal route -- the certificate's own delta_tau-buffered
+    UNMODIFIED nominal route, as predicted by B3's own certificate model
+    evaluated offline -- NOT independent ground truth (see this module's
+    own header comment for why). The certificate's own delta_tau-buffered
     hard-limit definition, not a razor's-edge |tau|==tau_max boundary (a
     disclosed simplification: reuses the existing certificate computation
     exactly as-is rather than adding a second, unbuffered check). Requires

@@ -20,6 +20,7 @@ import sys
 
 from run_experiment import run_one
 from compute_metrics import compute
+from capture_trajectory import capture_nominal_trajectory
 
 LAUNCH_FILES = {
     "B1": "fr3_hybrid_planning_demo.launch.py",
@@ -46,9 +47,9 @@ FORCE_ENV = {
 }
 
 
-def run_cell(name, launch_file):
+def run_cell(name, launch_file, extra_env):
     bag_dir = f"{BAG_ROOT}/{name}"
-    env = dict(FORCE_ENV)
+    env = dict(extra_env)
     if name == "B3":
         # The entire Exp3-vs-Exp4 code-path difference: B3's route-level
         # search gets the schedule at plan time. B1/B2 have no route-level
@@ -70,10 +71,26 @@ def main():
         shutil.rmtree(BAG_ROOT)
     os.makedirs(BAG_ROOT)
 
+    # Determinism fix (external review finding: this file was still
+    # missing the fix exp2_payload_sweep.py/exp3_interaction_force.py
+    # already got): capture ONE real OMPL trajectory here and replay it
+    # for every baseline below -- without this, B1/B2/B3 could each get
+    # their own independently randomized OMPL plan, the same gap fixed
+    # elsewhere. Plan once with force-blind, force_known_at_plan_time=false
+    # semantics (OMPL's own geometric search doesn't depend on force
+    # anyway) -- B3's own cell below still sets FR3_FORCE_KNOWN_AT_PLAN_TIME
+    # for its LOCAL route-level search, independent of this capture.
+    nominal_path = f"{BAG_ROOT}_nominal_trajectory.bin"
+    print("Capturing one real OMPL trajectory for deterministic replay across B1/B2/B3...")
+    capture_nominal_trajectory(GOAL, nominal_path)
+    replay_env = dict(FORCE_ENV)
+    replay_env["FR3_GLOBAL_PLANNER_YAML"] = "config/hybrid_planning/global_planner_replay.yaml"
+    replay_env["FR3_REPLAY_TRAJECTORY_PATH"] = nominal_path
+
     print(f"{'baseline':>8} | {'success':>8} | {'min_margin':>10} | {'interv episodes':>16} | route events")
     for name, launch_file in LAUNCH_FILES.items():
         print(f"Running {name}...")
-        m = run_cell(name, launch_file)
+        m = run_cell(name, launch_file, replay_env)
         route_events = {k: v for k, v in (m.get("route_level_events") or {}).items() if v}
         min_margin = m["min_margin"] if m["min_margin"] is not None else float("nan")
         # Episode count, not raw sample count -- see compute_metrics.py's

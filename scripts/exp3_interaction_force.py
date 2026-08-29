@@ -3,12 +3,16 @@
 end-effector force (force_known_at_plan_time=False -- B3 only detects it
 once it enters the bounded ONLINE horizon, never at route-planning time),
 ported from code/experiments/exp3_interaction_force.py. Reports the
-detection lead time T_warning = T_failure - T_detection for B2 and B3
-against the ground-truth failure time of the UNMODIFIED nominal route
-(computed by a separate force_known_at_plan_time=true B3 run so the
-route-level certificate evaluation folds the force in -- see
-ground_truth.py; this does NOT mean the real B2/B3 comparison runs below
-know the force in advance, only the offline ground-truth analysis does).
+detection lead time T_warning = T_crossing - T_detection for B2 and B3
+against the nominal-route constraint-crossing time of the UNMODIFIED
+route (computed by a separate force_known_at_plan_time=true B3 run so
+the route-level certificate evaluation folds the force in -- see
+nominal_route_crossing.py; this does NOT mean the real B2/B3 comparison
+runs below know the force in advance, only the offline crossing-time
+analysis does). T_crossing is B3's OWN certificate model evaluated
+offline, not independent ground truth -- see
+nominal_route_crossing.py's own header comment for why this module was
+renamed from its earlier "ground_truth" name (external review finding).
 
 By construction (code/baselines.py's own docstring), B1 has no detection
 mechanism at all -- reported as task success/failure only, no T_detection.
@@ -22,7 +26,7 @@ import sys
 
 from run_experiment import run_one
 from compute_metrics import compute, read_bag
-from ground_truth import ground_truth_failure_time
+from nominal_route_crossing import nominal_route_constraint_crossing_time
 from capture_trajectory import capture_nominal_trajectory
 
 LAUNCH_FILES = {
@@ -39,8 +43,8 @@ BAG_ROOT = "/tmp/exp3_interaction_force"
 GOAL = "small_slow"
 
 # Force schedule: ramp-then-hold, force_known_at_plan_time=False for every
-# REAL comparison run (B1/B2/B3) -- only the separate ground-truth run
-# below sets it true. Values tuned empirically against real FR3 dynamics
+# REAL comparison run (B1/B2/B3) -- only the separate nominal-route-
+# crossing run below sets it true. Values tuned empirically against real FR3 dynamics
 # (B3_DEBUG_HORIZON), matching every prior phase's practice -- Python
 # reference's own F_MAX=[0,-55N] is calibrated to a reduced-order 3-DOF
 # toy, not reused directly at FR3 scale. T_ONSET/RAMP_DURATION are relative
@@ -131,13 +135,13 @@ def run_cell(name, launch_file, extra_env):
     return m
 
 
-def run_ground_truth(extra_env):
+def run_nominal_route_crossing(extra_env):
     """A separate B3 run with force_known_at_plan_time=true, purely so the
     whole-route certificate evaluation (HorizonTrajectoryOperator::
     addTrajectorySegment's own m0) folds the force in -- see
-    ground_truth.py's own header comment. This run's actual online
-    behavior (whether B3 intervenes) is irrelevant and unused; only the
-    FIRST "[whole-route]" B3_DEBUG_HORIZON log batch is read."""
+    nominal_route_crossing.py's own header comment. This run's actual
+    online behavior (whether B3 intervenes) is irrelevant and unused;
+    only the FIRST "[whole-route]" B3_DEBUG_HORIZON log batch is read."""
     env = dict(extra_env)
     env["FR3_FORCE_KNOWN_AT_PLAN_TIME"] = "true"
     env["B3_DEBUG_HORIZON"] = "1"
@@ -146,13 +150,13 @@ def run_ground_truth(extra_env):
     # single-shot run's readiness poll -- retry once rather than treat a
     # flake as "never" (a real, disclosed, different finding).
     for attempt in range(2):
-        bag_dir = f"{BAG_ROOT}/ground_truth" + ("" if attempt == 0 else f"_retry{attempt}")
+        bag_dir = f"{BAG_ROOT}/nominal_crossing" + ("" if attempt == 0 else f"_retry{attempt}")
         launch_log = bag_dir + "_launch.log"
         try:
             run_one("fr3_b3_demo.launch.py", bag_dir, extra_env=env, goal=GOAL, goal_timeout=30.0, quiet=True)
-            return ground_truth_failure_time(launch_log)
+            return nominal_route_constraint_crossing_time(launch_log)
         except RuntimeError as e:
-            print(f"  ERROR on ground-truth run (attempt {attempt + 1}): {e}", file=sys.stderr)
+            print(f"  ERROR on nominal-route-crossing run (attempt {attempt + 1}): {e}", file=sys.stderr)
     return None
 
 
@@ -163,24 +167,26 @@ def main():
 
     # Determinism fix (external review, Critical finding): every run below
     # used to trigger its OWN fresh, randomized/unseeded OMPL plan, so
-    # nothing guaranteed B1/B2/B3/ground-truth actually shared the
-    # "identical geometric trajectory, geometric path and time law held
-    # fixed" the paper's own framing requires. Plan ONCE for real here
-    # (force-blind -- OMPL's own geometric search doesn't depend on
+    # nothing guaranteed B1/B2/B3/nominal-route-crossing actually shared
+    # the "identical geometric trajectory, geometric path and time law
+    # held fixed" the paper's own framing requires. Plan ONCE for real
+    # here (force-blind -- OMPL's own geometric search doesn't depend on
     # force/payload at all) and replay that captured plan verbatim for
     # every cell below -- see fr3_replay_global_planner's own header
     # comment for why this is architecturally clean, not a hack.
     nominal_path = f"{BAG_ROOT}_nominal_trajectory.bin"
-    print("Capturing one real OMPL trajectory for deterministic replay across B1/B2/B3/ground-truth...")
+    print("Capturing one real OMPL trajectory for deterministic replay across B1/B2/B3/nominal-route-crossing...")
     capture_nominal_trajectory(GOAL, nominal_path)
     replay_env = dict(FORCE_ENV)
     replay_env["FR3_GLOBAL_PLANNER_YAML"] = "config/hybrid_planning/global_planner_replay.yaml"
     replay_env["FR3_REPLAY_TRAJECTORY_PATH"] = nominal_path
 
-    print("Running ground-truth (force_known_at_plan_time=true, unused online behavior)...")
-    t_failure = run_ground_truth(replay_env)
-    print(f"Ground-truth failure time (unmodified nominal route): "
-          f"{t_failure if t_failure is not None else 'never'} s")
+    print("Computing nominal-route constraint-crossing time "
+          "(force_known_at_plan_time=true, unused online behavior; "
+          "model-predicted from B3's own certificate, not independent ground truth)...")
+    t_crossing = run_nominal_route_crossing(replay_env)
+    print(f"Nominal-route constraint-crossing time (unmodified route, model-predicted): "
+          f"{t_crossing if t_crossing is not None else 'never'} s")
 
     results = {}
     for name, launch_file in LAUNCH_FILES.items():
@@ -192,7 +198,7 @@ def main():
     for name in ["B1", "B2", "B3"]:
         m = results[name]
         t_detect = m["t_detect"]
-        warning = (t_failure - t_detect) if (t_failure is not None and t_detect is not None) else None
+        warning = (t_crossing - t_detect) if (t_crossing is not None and t_detect is not None) else None
         print(f"{name:>8} | {str(m['task_success']):>8} | "
               f"{('%.3f' % t_detect) if t_detect is not None else 'None':>9} | "
               f"{('%.3f' % warning) if warning is not None else 'None':>10}")

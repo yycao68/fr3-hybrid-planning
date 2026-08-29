@@ -125,7 +125,7 @@ GOALS = {
     # This route duration is still shorter than the certificate's own
     # online receding horizon (15 steps * 0.02s = 0.3s), which keeps
     # evaluating PAST route completion via "hold at terminal state" --
-    # ground_truth.py's ground-truth check extends its own evaluation
+    # nominal_route_crossing.py's own crossing-time check extends its evaluation
     # window to cover that same hold phase for exactly this reason (see
     # torque_margin_certificate.cpp's own "whole-route-extended" block).
     "small_slow": dict(
@@ -220,6 +220,18 @@ def send_goal(domain_id: int, goal_spec: dict, timeout_s: float = 30.0, on_accep
     rclpy.init(args=["--ros-args"])
     node = Node("run_experiment_goal_sender")
     client = ActionClient(node, HybridPlanner, "/hybrid_planning/run_hybrid_planning")
+    # External review finding: compute_metrics.py's own planning_latency_s
+    # used to measure from BAG START (run_one()'s own ~0.5s pre-goal
+    # recorder buffer baked in), not from the actual goal request -- not
+    # true planning latency. This one-shot marker, published the instant
+    # the goal is actually sent, gives compute_metrics.py a real reference
+    # point. transient_local QoS + publishing before the bag recorder's
+    # own subscriber could plausibly miss it is the same discovery-timing
+    # concern publish_force_start's own comment already covers -- this
+    # node stays alive well past this point (through the whole action),
+    # so it's not a risk here.
+    goal_sent_pub = node.create_publisher(
+        Empty, "/fr3_experiment/goal_sent", QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
 
     result = (False, None)
     try:
@@ -256,6 +268,7 @@ def send_goal(domain_id: int, goal_spec: dict, timeout_s: float = 30.0, on_accep
         goal.planning_group = "fr3_arm"
         goal.motion_sequence = sequence
 
+        goal_sent_pub.publish(Empty())
         future = client.send_goal_async(goal)
         rclpy.spin_until_future_complete(node, future, timeout_sec=15.0)
         goal_handle = future.result()
@@ -339,7 +352,7 @@ def run_one(launch_file: str, bag_dir: str, extra_env: dict = None, goal: str = 
 
     bag_proc = subprocess.Popen(
         ["ros2", "bag", "record", "-o", bag_dir,
-         "/joint_states", "/diagnostics", "/rosout", "/global_trajectory"],
+         "/joint_states", "/diagnostics", "/rosout", "/global_trajectory", "/fr3_experiment/goal_sent"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
     )
     try:

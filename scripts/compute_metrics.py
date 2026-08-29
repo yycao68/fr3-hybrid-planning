@@ -72,6 +72,10 @@ SETTLE_WINDOW_S = 0.3
 # this is the actual planning/execution boundary). "Execution" ends at
 # the LAST sample the joint-space error was still above POS_TOL_RAD --
 # i.e., time to first SUSTAINED convergence, excluding the settle tail.
+# planning_latency_s itself starts from /fr3_experiment/goal_sent's own
+# bag timestamp (published by send_goal() the instant it sends the goal,
+# a later external-review fix) rather than bag start, so it no longer
+# bakes in the pre-goal buffer either -- see its own computation below.
 
 
 def read_bag(bag_dir: str):
@@ -156,7 +160,20 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
     global_traj_msgs = messages.get("/global_trajectory", [])
     if global_traj_msgs:
         t_global_traj = min(t for t, _ in global_traj_msgs)
-        planning_latency_s = (t_global_traj - t0) / 1e9
+        # planning_latency_s measures from the ACTUAL goal request
+        # (/fr3_experiment/goal_sent's own bag timestamp, published by
+        # send_goal() the instant it sends the goal) to when the local
+        # planner received its reference trajectory -- external review
+        # finding: measuring from bag START (t0) instead silently baked
+        # in run_one()'s own ~0.5s pre-goal recorder buffer, overclaiming
+        # what "planning latency" means. Falls back to t0 for older bags
+        # recorded before this marker existed (the field is then still
+        # the old, buffer-inclusive number -- undetectable from the bag
+        # alone which case applies, so not separately flagged in the
+        # result).
+        goal_sent_msgs = messages.get("/fr3_experiment/goal_sent", [])
+        t_goal_sent = min(t for t, _ in goal_sent_msgs) if goal_sent_msgs else t0
+        planning_latency_s = (t_global_traj - t_goal_sent) / 1e9
         t_last_violation = t0
         for t, msg in joint_states:
             positions = dict(zip(msg.name, msg.position))
@@ -185,7 +202,7 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
     log(f"task_success: {task_success}")
     log(f"duration_s: {duration_s:.3f} (full bag span, includes pre-goal buffer + settle tail)")
     if planning_latency_s is not None:
-        log(f"planning_latency_s: {planning_latency_s:.3f} (includes run_one()'s own ~0.5s pre-goal buffer)")
+        log(f"planning_latency_s: {planning_latency_s:.3f} (goal request to /global_trajectory received)")
         log(f"execution_duration_s: {execution_duration_s:.3f} (time to first sustained convergence)")
 
     diag_msgs = messages.get("/diagnostics", [])
