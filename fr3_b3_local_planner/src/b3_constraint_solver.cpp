@@ -219,10 +219,18 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
   // different cycle instead -- reference_trajectory_ doesn't change
   // cycle to cycle absent a route-level Level 1/2/3 event, so that would
   // just reproduce the same deterministic number and prove nothing.
-  // scripts/validate_prediction.py compares THIS cycle's own
-  // m_phys_observed against an EARLIER cycle's m_phys prediction for the
-  // same absolute future time (binding_step*control_period_ ahead),
-  // offline, from the recorded bag.
+  // External review, precision note: force_schedule/force_t_now below
+  // are the SAME commanded/modeled force used for m_phys's own
+  // prediction, not an independently measured one -- re-verified this
+  // directly (observed_state below is a genuine copy of the REAL
+  // current_state, position+velocity, never local_trajectory's own
+  // reference; only the acceleration and the force model are shared).
+  // This validates prediction of future actuator margin under MEASURED
+  // ROBOT-STATE EVOLUTION specifically -- not a complete, independent
+  // validation of the force model itself. scripts/validate_prediction.py
+  // compares THIS cycle's own m_phys_observed against an EARLIER cycle's
+  // m_phys prediction for the same absolute future time
+  // (binding_step*control_period_ ahead), offline, from the recorded bag.
   moveit::core::RobotState observed_state(*current_state);
   std::vector<double> qddot_ref_v;
   local_trajectory.getWayPoint(0).copyJointGroupAccelerations(jmg, qddot_ref_v);

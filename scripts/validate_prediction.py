@@ -17,6 +17,17 @@ LATER cycle's own m_phys_observed at that same absolute time T --
 answering "did the certificate's predicted future margin match what was
 later physically observed," not just "did it fire ahead of failure."
 
+Precision note (external review): m_phys_observed's own force input is
+the SAME commanded/modeled force used for m_phys's own prediction, not
+an independently measured one (re-verified directly against the C++:
+observed_state is a genuine copy of the real measured robot state,
+position+velocity, never the reference trajectory -- only the
+acceleration and the force model are shared). So this validates
+prediction of future actuator margin under MEASURED ROBOT-STATE
+EVOLUTION specifically, not a complete independent validation of the
+force model itself -- the more precise of the two claims, and the one
+this script's own results should be described as.
+
 Usage: python3 validate_prediction.py /tmp/some_b3_run [--dt 0.02]
 """
 import argparse
@@ -41,6 +52,24 @@ def compute_summary(results):
         "rmse": (sum(e * e for e in errors) / n) ** 0.5,
         "max_abs_error": max(abs(e) for e in errors),
     }
+
+
+def summarize_by_horizon(results):
+    """Groups results by their own horizon_s (rounded to avoid float-
+    equality noise -- binding_step*dt) and returns {horizon_s:
+    compute_summary_dict}, external review's own suggested "error vs.
+    prediction horizon" reporting. A single run typically only has a
+    handful of validated predictions (the online window is short, see
+    README's own "Known environmental gaps"), so most buckets will have
+    n=1 here -- this is honest reporting infrastructure for when more
+    data accumulates (e.g. aggregating across multiple runs), not a
+    claim that any one run's own per-horizon breakdown is already
+    statistically meaningful."""
+    buckets = {}
+    for r in results:
+        key = round(r["horizon_s"], 6)
+        buckets.setdefault(key, []).append(r)
+    return {horizon_s: compute_summary(rs) for horizon_s, rs in sorted(buckets.items())}
 
 
 def validate_predictions(bag_dir: str, dt: float = 0.02, quiet: bool = False):
@@ -81,10 +110,24 @@ def validate_predictions(bag_dir: str, dt: float = 0.02, quiet: bool = False):
         if binding_step_i <= 0:
             continue  # not a genuine future prediction -- nothing to validate
         t_predict = t_i + int(round(binding_step_i * dt * 1e9))
-        candidates = [s for s in b3_samples if s[0] >= t_i]
+        # External review finding: candidates must be STRICTLY later than
+        # the prediction cycle itself (t_i), not >= -- otherwise the
+        # prediction cycle's own sample could be selected as its own
+        # "later observation," which isn't a genuine future check.
+        # binding_step_i > 0 (already required above) guarantees
+        # t_predict > t_i, so this only matters for which SAMPLE gets
+        # compared against, not whether t_predict itself is in the future.
+        candidates = [s for s in b3_samples if s[0] > t_i]
+        if not candidates:
+            continue  # no later sample at all (prediction near the end of the run)
         nearest = min(candidates, key=lambda s: abs(s[0] - t_predict))
         gap_s = abs(nearest[0] - t_predict) / 1e9
-        if gap_s > dt * 2:  # too far from any real sample to trust the alignment
+        # External review finding: dt*2 (40ms at the default 20ms period)
+        # is generous for a paper claiming prediction accuracy -- samples
+        # are spaced ~dt apart, so the worst-case gap to the NEAREST
+        # sample is dt/2 by construction of the sampling itself; anything
+        # looser is accepting a worse alignment than the data supports.
+        if gap_s > dt / 2:  # too far from any real sample to trust the alignment
             continue
         results.append({
             "t_predict_s": (t_i - t0) / 1e9,
@@ -108,6 +151,11 @@ def validate_predictions(bag_dir: str, dt: float = 0.02, quiet: bool = False):
     for r in results:
         log(f"{r['t_predict_s']:12.3f} {r['horizon_s']:10.3f} {r['predicted']:10.4f} "
             f"{r['observed']:10.4f} {r['error']:+8.4f}")
+
+    by_horizon = summarize_by_horizon(results)
+    log(f"{'horizon_s':>10} {'n':>3} {'RMSE':>8} {'MAE':>8} {'mean_error':>11}")
+    for horizon_s, s in by_horizon.items():
+        log(f"{horizon_s:10.3f} {s['n']:3d} {s['rmse']:8.4f} {s['mae']:8.4f} {s['mean_error']:+11.4f}")
     return results
 
 

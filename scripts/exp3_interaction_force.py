@@ -17,6 +17,19 @@ renamed from its earlier "ground_truth" name (external review finding).
 By construction (code/baselines.py's own docstring), B1 has no detection
 mechanism at all -- reported as task success/failure only, no T_detection.
 
+External review finding: force onset (FR3_FORCE_T_ONSET, applied via
+find_force_t0's own goal-ACCEPTANCE-relative reference) doesn't account
+for the small, RUN-TO-RUN-VARYING planning latency between acceptance
+and when local execution actually begins -- contaminating T_warning's
+own cross-run comparability (T_crossing and t_detect come from DIFFERENT
+launches, each with its own, slightly different latency). Both are now
+re-anchored to that run's own /global_trajectory receive time (already
+recorded in every bag; the actual local-execution-start proxy, matching
+compute_metrics.py's own planning_latency_s definition) via
+find_execution_start_offset, purely in this offline analysis -- no
+change to the live force-injection trigger itself (still fired at
+acceptance, unchanged, zero risk to that already-working mechanism).
+
 Usage: python3 exp3_interaction_force.py
 """
 import os
@@ -28,6 +41,7 @@ from run_experiment import run_one
 from compute_metrics import compute, read_bag
 from nominal_route_crossing import nominal_route_constraint_crossing_time
 from capture_trajectory import capture_nominal_trajectory
+from validate_prediction import validate_predictions
 
 LAUNCH_FILES = {
     "B1": "fr3_hybrid_planning_demo.launch.py",
@@ -92,6 +106,30 @@ def find_force_t0(launch_log_path):
     return None
 
 
+def find_execution_start_offset(bag_dir, force_t0):
+    """Seconds from goal-acceptance (force_t0's own sim-time reference,
+    parsed from a node_->now() log line) to when local execution
+    actually began -- the FIRST /diagnostics message's own header.stamp
+    (sim time, the SAME clock as force_t0 and first_detection_time's own
+    comparison below). Deliberately NOT read_bag()'s own bag-recording-
+    time metadata (e.g. from /global_trajectory, which has no header at
+    all to read a sim-time stamp from anyway) -- confirmed live that's a
+    DIFFERENT, wall-clock-based reference, not comparable to force_t0 at
+    all: mixing them gave a nonsense ~1.8e9s result before this was
+    caught. B2/B3 publish /diagnostics every solve() cycle starting from
+    the first real local-planning tick, so its first message IS "local
+    execution began." None if /diagnostics wasn't recorded or force_t0
+    is None."""
+    if force_t0 is None:
+        return None
+    msgs = read_bag(bag_dir)
+    diag_msgs = msgs.get("/diagnostics", [])
+    if not diag_msgs:
+        return None
+    t_exec_start = min(msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9 for _, msg in diag_msgs)
+    return t_exec_start - force_t0
+
+
 def first_detection_time(bag_dir, force_t0):
     """First /diagnostics message (by its own header.stamp, sim time) at
     which this baseline's own mechanism reacted, converted to elapsed
@@ -129,9 +167,15 @@ def run_cell(name, launch_file, extra_env):
         print(f"  ERROR on {name}: {e}", file=sys.stderr)
         return {"task_success": None, "t_detect": None}
     force_t0 = find_force_t0(launch_log)
-    t_detect = first_detection_time(bag_dir, force_t0) if name in ("B2", "B3") else None
+    t_detect_raw = first_detection_time(bag_dir, force_t0) if name in ("B2", "B3") else None
+    exec_offset = find_execution_start_offset(bag_dir, force_t0) if name in ("B2", "B3") else None
+    # Re-anchor from goal-acceptance to real execution start (see this
+    # module's own header comment) -- falls back to the acceptance-
+    # relative raw value if /global_trajectory wasn't recorded.
+    t_detect = (t_detect_raw - exec_offset) if (t_detect_raw is not None and exec_offset is not None) else t_detect_raw
     m["t_detect"] = t_detect
     m["force_t0"] = force_t0
+    m["execution_start_offset_s"] = exec_offset
     return m
 
 
@@ -154,7 +198,16 @@ def run_nominal_route_crossing(extra_env):
         launch_log = bag_dir + "_launch.log"
         try:
             run_one("fr3_b3_demo.launch.py", bag_dir, extra_env=env, goal=GOAL, goal_timeout=30.0, quiet=True)
-            return nominal_route_constraint_crossing_time(launch_log)
+            t_crossing_raw = nominal_route_constraint_crossing_time(launch_log)
+            force_t0 = find_force_t0(launch_log)
+            exec_offset = find_execution_start_offset(bag_dir, force_t0)
+            # Re-anchor to real execution start, same as t_detect below --
+            # this run has its OWN planning latency, independent of the
+            # B2/B3 comparison runs', which is exactly the cross-run
+            # inconsistency this fix removes.
+            if t_crossing_raw is not None and exec_offset is not None:
+                return t_crossing_raw - exec_offset
+            return t_crossing_raw
         except RuntimeError as e:
             print(f"  ERROR on nominal-route-crossing run (attempt {attempt + 1}): {e}", file=sys.stderr)
     return None
@@ -202,6 +255,21 @@ def main():
         print(f"{name:>8} | {str(m['task_success']):>8} | "
               f"{('%.3f' % t_detect) if t_detect is not None else 'None':>9} | "
               f"{('%.3f' % warning) if warning is not None else 'None':>10}")
+
+    # External review's own "strongly recommended" finding: predicted-
+    # vs-observed margin validation (validate_prediction.py) is a
+    # stronger, more direct test of the word "predictive" than "B3 acted
+    # before B2" alone -- folded into Exp3's own primary report rather
+    # than left as a separate, easy-to-forget manual step, using this
+    # SAME B3 run's own bag (already has the real force disturbance
+    # active, exactly the scenario worth validating against).
+    print()
+    print("Predicted-vs-observed margin validation (B3's own run above, see validate_prediction.py "
+          "for what this does and doesn't validate):")
+    try:
+        validate_predictions(f"{BAG_ROOT}/B3")
+    except RuntimeError as e:
+        print(f"  ERROR: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
