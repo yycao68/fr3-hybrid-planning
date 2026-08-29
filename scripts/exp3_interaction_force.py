@@ -97,7 +97,11 @@ def first_detection_time(bag_dir, force_t0):
     if force_t0 is None:
         return None
     msgs = read_bag(bag_dir)
-    for _, msg in msgs.get("/diagnostics", []):
+    # "first" is only meaningful in time order -- read_bag's own bag-read
+    # order isn't guaranteed to match, so sort explicitly (same precedent
+    # as compute_metrics.py's own joint_states/diag_msgs sorting).
+    diag_msgs = sorted(msgs.get("/diagnostics", []), key=lambda x: x[0])
+    for _, msg in diag_msgs:
         stamp = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9
         for status in msg.status:
             kv = {v.key: v.value for v in status.values}
