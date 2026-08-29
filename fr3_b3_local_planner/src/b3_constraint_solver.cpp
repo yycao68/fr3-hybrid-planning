@@ -132,7 +132,8 @@ bool B3ConstraintSolver::reset()
   return true;
 }
 
-void B3ConstraintSolver::publishDiagnostics(const std::string& level, double m_phys, int binding_step)
+void B3ConstraintSolver::publishDiagnostics(const std::string& level, double m_phys, int binding_step,
+                                             double m_phys_observed)
 {
   diagnostic_msgs::msg::DiagnosticArray diag_msg;
   diag_msg.header.stamp = node_->now();
@@ -152,6 +153,10 @@ void B3ConstraintSolver::publishDiagnostics(const std::string& level, double m_p
   binding_step_kv.key = "binding_step";
   binding_step_kv.value = std::to_string(binding_step);
   status.values.push_back(binding_step_kv);
+  diagnostic_msgs::msg::KeyValue m_phys_observed_kv;
+  m_phys_observed_kv.key = "m_phys_observed";
+  m_phys_observed_kv.value = std::to_string(m_phys_observed);
+  status.values.push_back(m_phys_observed_kv);
   diag_msg.status.push_back(status);
   diagnostics_pub_->publish(diag_msg);
 }
@@ -185,7 +190,8 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
     moveit_msgs::msg::RobotTrajectory msg;
     robot_command.getRobotTrajectoryMsg(msg);
     local_solution = msg.joint_trajectory;
-    publishDiagnostics("4", std::numeric_limits<double>::quiet_NaN(), -1);
+    publishDiagnostics("4", std::numeric_limits<double>::quiet_NaN(), -1,
+                        std::numeric_limits<double>::quiet_NaN());
     return feedback_result;
   }
 
@@ -199,6 +205,35 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
   int binding_step = -1;
   const double m_phys = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, local_trajectory, binding_step,
                                                      "horizon", force_schedule, force_t_now);
+
+  // External review, "P2" predicted-vs-observed finding: does the
+  // certificate's own PREDICTED margin (m_phys above, from the
+  // REFERENCE horizon) match what later gets physically OBSERVED?
+  // m_phys_observed answers "if the robot were exactly HERE (real
+  // measured position/velocity) doing what's currently commanded (the
+  // reference's own acceleration for this instant, not a noisy
+  // finite-difference estimate), would the certificate see a violation
+  // RIGHT NOW" -- a genuine physics check using REAL tracking state,
+  // isolating what tracking error does to the certificate's own claim.
+  // Deliberately NOT re-evaluating the same reference trajectory from a
+  // different cycle instead -- reference_trajectory_ doesn't change
+  // cycle to cycle absent a route-level Level 1/2/3 event, so that would
+  // just reproduce the same deterministic number and prove nothing.
+  // scripts/validate_prediction.py compares THIS cycle's own
+  // m_phys_observed against an EARLIER cycle's m_phys prediction for the
+  // same absolute future time (binding_step*control_period_ ahead),
+  // offline, from the recorded bag.
+  moveit::core::RobotState observed_state(*current_state);
+  std::vector<double> qddot_ref_v;
+  local_trajectory.getWayPoint(0).copyJointGroupAccelerations(jmg, qddot_ref_v);
+  observed_state.setJointGroupAccelerations(jmg, qddot_ref_v);
+  observed_state.update();
+  robot_trajectory::RobotTrajectory observed_traj(local_trajectory.getRobotModel(), local_trajectory.getGroupName());
+  observed_traj.addSuffixWayPoint(observed_state, control_period_);
+  int observed_binding_step = -1;
+  const double m_phys_observed = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, observed_traj,
+                                                              observed_binding_step, "observed", force_schedule,
+                                                              force_t_now);
 
   bool used_reshape = false;
   double reshape_margin = 0.0;
@@ -299,7 +334,7 @@ B3ConstraintSolver::solve(const robot_trajectory::RobotTrajectory& local_traject
   moveit_msgs::msg::RobotTrajectory robot_command_msg;
   robot_command.getRobotTrajectoryMsg(robot_command_msg);
   local_solution = robot_command_msg.joint_trajectory;
-  publishDiagnostics(level_str, m_phys, binding_step);
+  publishDiagnostics(level_str, m_phys, binding_step, m_phys_observed);
   return feedback_result;
 }
 

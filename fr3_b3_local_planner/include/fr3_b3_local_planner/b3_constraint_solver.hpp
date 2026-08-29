@@ -53,8 +53,13 @@ private:
   // Phase 4a: publishes a DiagnosticArray with level/m_phys/binding_step
   // KeyValue pairs -- m_phys is NaN when not evaluated this cycle (the
   // sticky-brake continuation branch doesn't re-run the certificate, by
-  // design; see solve()'s own comment).
-  void publishDiagnostics(const std::string& level, double m_phys, int binding_step);
+  // design; see solve()'s own comment). m_phys_observed (external review,
+  // "P2" predicted-vs-observed finding) is the SAME certificate formula
+  // evaluated at the REAL measured current state instead of the
+  // reference horizon -- see solve()'s own comment for why this is the
+  // meaningful comparison, not re-evaluating the same reference from a
+  // different cycle.
+  void publishDiagnostics(const std::string& level, double m_phys, int binding_step, double m_phys_observed);
 
   rclcpp::Node::SharedPtr node_;
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
