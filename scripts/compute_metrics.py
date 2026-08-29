@@ -55,6 +55,24 @@ POS_TOL_RAD = 0.06
 # ("small_slow"'s own route is itself only ~0.3-0.6s).
 SETTLE_WINDOW_S = 0.3
 
+# True planning/execution time separation (external review finding):
+# duration_s (below) is the FULL bag span -- it blends run_one()'s own
+# ~0.5s pre-goal recorder-startup buffer, global+local planning latency,
+# real execution time, AND the deliberate 1.0s post-completion settle
+# sleep into one number, so it can't answer "was this run slow because
+# of planning overhead or because execution itself took a long time."
+# moveit_msgs/MotionPlanResponse's own self-reported `planning_time`
+# field would be the clean answer, but it's NOT populated by this
+# platform's pipeline -- confirmed live across 5 real bags (both
+# real-OMPL and replay-based), always exactly 0.0. Derived from bag
+# timestamps instead: /global_trajectory's own receive time marks when
+# the local planner got its reference trajectory and real tracking could
+# begin (works identically whether that trajectory came from a fresh
+# OMPL plan or fr3_replay_global_planner's own replay -- either way,
+# this is the actual planning/execution boundary). "Execution" ends at
+# the LAST sample the joint-space error was still above POS_TOL_RAD --
+# i.e., time to first SUSTAINED convergence, excluding the settle tail.
+
 
 def read_bag(bag_dir: str):
     reader = rosbag2_py.SequentialReader()
@@ -129,11 +147,33 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
     t1 = joint_states[-1][0]
     duration_s = (t1 - t0) / 1e9
 
+    # planning_latency_s/execution_duration_s -- see this file's own
+    # "True planning/execution time separation" comment above for what
+    # these do and don't isolate. None if /global_trajectory wasn't
+    # recorded (older bags, or a script not using run_one()).
+    planning_latency_s = None
+    execution_duration_s = None
+    global_traj_msgs = messages.get("/global_trajectory", [])
+    if global_traj_msgs:
+        t_global_traj = min(t for t, _ in global_traj_msgs)
+        planning_latency_s = (t_global_traj - t0) / 1e9
+        t_last_violation = t0
+        for t, msg in joint_states:
+            positions = dict(zip(msg.name, msg.position))
+            if set(goal_targets) - set(positions):
+                continue
+            e = sum((positions[name] - goal_val) ** 2 for name, goal_val in goal_targets.items()) ** 0.5
+            if e > POS_TOL_RAD:
+                t_last_violation = t
+        execution_duration_s = max(t_last_violation - t_global_traj, 0) / 1e9
+
     result = {
         "final_pos_error_rad": final_pos_error_rad,
         "terminal_window_max_error_rad": terminal_window_max_error_rad,
         "task_success": task_success,
         "duration_s": duration_s,
+        "planning_latency_s": planning_latency_s,
+        "execution_duration_s": execution_duration_s,
         "controller": None,
         "min_margin": None,
         "online_intervention_sample_count": None,
@@ -143,7 +183,10 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
     log(f"final_pos_error_rad: {final_pos_error_rad:.5f}")
     log(f"terminal_window_max_error_rad: {terminal_window_max_error_rad:.5f} (last {SETTLE_WINDOW_S}s)")
     log(f"task_success: {task_success}")
-    log(f"duration_s: {duration_s:.3f}")
+    log(f"duration_s: {duration_s:.3f} (full bag span, includes pre-goal buffer + settle tail)")
+    if planning_latency_s is not None:
+        log(f"planning_latency_s: {planning_latency_s:.3f} (includes run_one()'s own ~0.5s pre-goal buffer)")
+        log(f"execution_duration_s: {execution_duration_s:.3f} (time to first sustained convergence)")
 
     diag_msgs = messages.get("/diagnostics", [])
     # Explicitly search for one of the two controllers THIS platform ever
