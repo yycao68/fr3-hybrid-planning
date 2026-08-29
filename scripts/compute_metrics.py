@@ -97,7 +97,8 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
         "duration_s": duration_s,
         "controller": None,
         "min_margin": None,
-        "online_intervention_count": None,
+        "online_intervention_sample_count": None,
+        "online_intervention_episode_count": None,
         "route_level_events": None,
     }
     log(f"final_pos_error_rad: {final_pos_error_rad:.5f}")
@@ -116,8 +117,15 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
         None,
     )
     if controller_name:
+        # Episode counting is order-dependent (a transition needs to know
+        # the PREVIOUS sample's own state) -- sort explicitly rather than
+        # trust bag read order, matching this file's own joint_states.sort()
+        # precedent.
+        diag_msgs = sorted(diag_msgs, key=lambda x: x[0])
         margins = []
-        intervention_count = 0
+        sample_count = 0
+        episode_count = 0
+        was_intervening = False
         for _, msg in diag_msgs:
             for status in msg.status:
                 if status.name != controller_name:
@@ -125,21 +133,31 @@ def compute(bag_dir: str, goal: str = "small", quiet: bool = False):
                 kv = {v.key: v.value for v in status.values}
                 if controller_name == "b2_constraint_solver":
                     margins.append(float(kv["min_margin_nm"]))
-                    if kv["intervened"] == "true":
-                        intervention_count += 1
+                    is_intervening = kv["intervened"] == "true"
                 elif controller_name == "b3_constraint_solver":
                     m_phys = float(kv["m_phys"])
                     if m_phys == m_phys:  # not NaN (sticky-brake continuation cycles)
                         margins.append(m_phys)
-                    if kv["level"] != "0":
-                        intervention_count += 1
+                    is_intervening = kv["level"] != "0"
+                # External review finding (episode-vs-sample counting): a
+                # naive per-SAMPLE tally inflates "number of times it
+                # intervened" by however many control cycles one sustained
+                # intervention happens to span. episode_count instead
+                # counts CONTIGUOUS intervening runs (distinct events) --
+                # increments only on the false->true transition.
+                if is_intervening:
+                    sample_count += 1
+                    if not was_intervening:
+                        episode_count += 1
+                was_intervening = is_intervening
         result["controller"] = controller_name
         result["min_margin"] = min(margins) if margins else None
-        result["online_intervention_count"] = intervention_count
+        result["online_intervention_sample_count"] = sample_count
+        result["online_intervention_episode_count"] = episode_count
         log(f"controller: {controller_name}")
         if margins:
             log(f"min_margin: {min(margins):.4f}")
-        log(f"online_intervention_count: {intervention_count}")
+        log(f"online_intervention_episode_count: {episode_count} (sample_count: {sample_count})")
     else:
         log("controller: none (stock plugins, no /diagnostics)")
 

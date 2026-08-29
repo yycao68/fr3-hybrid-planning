@@ -46,7 +46,8 @@ def run_cell(name, launch_file, payload, replay_env):
         return compute(bag_dir, goal="large", quiet=True)
     except RuntimeError as e:
         print(f"  ERROR on {name} @ {payload}kg: {e}", file=sys.stderr)
-        return {"task_success": None, "online_intervention_count": None,
+        return {"task_success": None, "online_intervention_sample_count": None,
+                "online_intervention_episode_count": None,
                 "min_margin": None, "route_level_events": {}}
 
 
@@ -84,18 +85,18 @@ def main():
 
         if first_violation["B1"] is None and row["B1"]["task_success"] is False:
             first_violation["B1"] = payload
-        if first_violation["B2"] is None and row["B2"]["online_intervention_count"]:
+        if first_violation["B2"] is None and row["B2"]["online_intervention_episode_count"]:
             first_violation["B2"] = payload
         b3_route = any((row["B3"]["route_level_events"] or {}).values())
-        b3_triggered = bool(row["B3"]["online_intervention_count"]) or b3_route
+        b3_triggered = bool(row["B3"]["online_intervention_episode_count"]) or b3_route
         if first_b3_trigger is None and b3_triggered:
             first_b3_trigger = payload
 
         b1, b2, b3 = row["B1"], row["B2"], row["B3"]
         min_margin = b3["min_margin"] if b3["min_margin"] is not None else float("nan")
         print(f"{payload:8.1f} | {str(b1['task_success']):>8} | "
-              f"{str(bool(b2['online_intervention_count'])):>10} {str(b2['task_success']):>8} | "
-              f"{str(bool(b3['online_intervention_count'])):>10} {str(b3_route):>9} {str(b3['task_success']):>8} "
+              f"{str(bool(b2['online_intervention_episode_count'])):>10} {str(b2['task_success']):>8} | "
+              f"{str(bool(b3['online_intervention_episode_count'])):>10} {str(b3_route):>9} {str(b3['task_success']):>8} "
               f"{min_margin:11.3f}")
 
     print()

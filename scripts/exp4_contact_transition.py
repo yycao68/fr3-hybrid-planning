@@ -61,7 +61,8 @@ def run_cell(name, launch_file):
     except RuntimeError as e:
         print(f"  ERROR on {name}: {e}", file=sys.stderr)
         return {"task_success": None, "min_margin": None,
-                "online_intervention_count": None, "route_level_events": {}}
+                "online_intervention_sample_count": None,
+                "online_intervention_episode_count": None, "route_level_events": {}}
 
 
 def main():
@@ -69,14 +70,18 @@ def main():
         shutil.rmtree(BAG_ROOT)
     os.makedirs(BAG_ROOT)
 
-    print(f"{'baseline':>8} | {'success':>8} | {'min_margin':>10} | {'online interv':>13} | route events")
+    print(f"{'baseline':>8} | {'success':>8} | {'min_margin':>10} | {'interv episodes':>16} | route events")
     for name, launch_file in LAUNCH_FILES.items():
         print(f"Running {name}...")
         m = run_cell(name, launch_file)
         route_events = {k: v for k, v in (m.get("route_level_events") or {}).items() if v}
         min_margin = m["min_margin"] if m["min_margin"] is not None else float("nan")
+        # Episode count, not raw sample count -- see compute_metrics.py's
+        # own comment (external review finding: a naive per-sample tally
+        # inflates "number of times it intervened" by however many
+        # control cycles one sustained intervention happens to span).
         print(f"{name:>8} | {str(m['task_success']):>8} | {min_margin:10.3f} | "
-              f"{str(m['online_intervention_count']):>13} | {route_events}")
+              f"{str(m['online_intervention_episode_count']):>16} | {route_events}")
 
 
 if __name__ == "__main__":
