@@ -35,6 +35,7 @@ bool HorizonTrajectoryOperator::initialize(const rclcpp::Node::SharedPtr& node,
   // See this class's own header comment for why these aren't b3.-namespaced.
   velocity_scaling_ = node_->declare_parameter<double>("local_velocity_scaling", 1.0);
   acceleration_scaling_ = node_->declare_parameter<double>("local_acceleration_scaling", 1.0);
+  progress_stall_timeout_s_ = node_->declare_parameter<double>("b3.progress_stall_timeout_s", 1.0);
   // The following params are shared with B3ConstraintSolver, loaded into
   // the SAME node -- whichever plugin initializes first declares them, the
   // other just reads them back (same has_parameter guard pattern as b3.dt,
@@ -396,10 +397,46 @@ HorizonTrajectoryOperator::getLocalTrajectory(const moveit::core::RobotState& cu
   // RobotState::interpolate (confirmed via a crash report pointing here).
   moveit::core::RobotStatePtr next_desired =
       std::make_shared<moveit::core::RobotState>(reference_trajectory_->getWayPoint(0));
-  if (reference_trajectory_->getStateAtDurationFromStart(current_duration_, next_desired) &&
-      next_desired->distance(current_state, joint_group_) <= WAYPOINT_RADIAN_TOLERANCE)
+  const bool got_next_desired = reference_trajectory_->getStateAtDurationFromStart(current_duration_, next_desired);
+  const double next_desired_dist = got_next_desired ? next_desired->distance(current_state, joint_group_) : -1.0;
+  const bool within_tolerance = got_next_desired && next_desired_dist <= WAYPOINT_RADIAN_TOLERANCE;
+
+  // Stall-timeout fallback -- see this class's own header comment on
+  // progress_stall_timeout_s_ for why this exists. Only tracked while
+  // there's still real progress left to make (current_duration_ <
+  // total_duration); once the route's own end is reached there's
+  // nothing left to unstick.
+  bool stall_timeout_expired = false;
+  if (!within_tolerance && current_duration_ < total_duration)
+  {
+    if (!has_stall_start_)
+    {
+      has_stall_start_ = true;
+      stall_start_time_ = node_->now();
+    }
+    else if ((node_->now() - stall_start_time_).seconds() >= progress_stall_timeout_s_)
+    {
+      stall_timeout_expired = true;
+    }
+  }
+  else
+  {
+    has_stall_start_ = false;
+  }
+
+  if (within_tolerance || stall_timeout_expired)
   {
     current_duration_ = std::min(current_duration_ + dt_, total_duration);
+    has_stall_start_ = false;
+  }
+
+  if (std::getenv("B3_DEBUG_PROGRESS") != nullptr)
+  {
+    RCLCPP_INFO(LOGGER,
+                "B3 debug [progress]: current_duration=%.4f/%.4f dist=%.4f tol=%.4f within_tolerance=%d "
+                "stall_timeout_expired=%d",
+                current_duration_, total_duration, next_desired_dist, WAYPOINT_RADIAN_TOLERANCE, within_tolerance,
+                stall_timeout_expired);
   }
 
   // Populate the horizon: horizon_steps_ future states at dt_ spacing,

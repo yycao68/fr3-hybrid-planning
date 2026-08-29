@@ -78,6 +78,22 @@ private:
   // continuous-time analog of SimpleSampler's next_waypoint_index_.
   double current_duration_{ 0.0 };
 
+  // Goal-execution-fragility fix attempt: current_duration_'s own
+  // advancement gate (next_desired->distance(current_state) <=
+  // WAYPOINT_RADIAN_TOLERANCE) can pin the WHOLE 7-joint group's shared
+  // target forever if even one joint can't quite close its own error
+  // (e.g. real torque saturation on a low-budget wrist joint) --
+  // confirmed live via direct instrumentation: distance stuck at
+  // EXACTLY 0.2195 rad (just 0.0195 over the 0.2 tolerance), unchanging,
+  // for the entire remainder of a 25s run on the "large" goal. If the
+  // target hasn't advanced for progress_stall_timeout_s_ of REAL time,
+  // advance anyway -- accepting the current tracking lag rather than
+  // deadlocking the whole route indefinitely. A large multiple of the
+  // nominal per-step control period (dt_), not a tight coupling to it.
+  double progress_stall_timeout_s_{ 1.0 };
+  bool has_stall_start_{ false };
+  rclcpp::Time stall_start_time_;
+
   // Phase 3b, Level 1 (route-level retiming): a second FrankaChainDynamics
   // instance (cheap -- just builds a KDL chain once at initialize) plus
   // its own copies of the certificate params B3ConstraintSolver already
