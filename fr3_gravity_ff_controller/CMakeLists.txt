@@ -66,17 +66,21 @@ ament_target_dependencies(gravity_feedforward_controller ${THIS_PACKAGE_INCLUDE_
 # (rcutilsExport.cmake) -- neither fr3_b2_local_planner nor
 # fr3_b3_local_planner hit this (their dependency set never surfaces it),
 # but this package's realtime_tools/controller_interface/hardware_interface
-# deps do. (2) libpython3.12, needed at dlopen/load time by the
+# deps do. (2) libpython, needed at dlopen/load time by the
 # *_rosidl_generator_py libraries pulled in above (see this file's own
 # comment on that) -- confirmed present via `find ... -iname libpython*`.
 # Both resolved by pointing the linker at the conda env's own lib dir
 # directly (derived from where rclcpp itself was actually found, robust
 # to $CONDA_PREFIX resolving to the wrong (base) env in this shell setup
 # -- confirmed live, same conda-activation quirk documented elsewhere in
-# this workspace) and linking python3.12 explicitly.
+# this workspace). External review finding: this used to link `python3.12`
+# by name, which would silently stop resolving on a future RoboStack Python
+# version bump; find_package(Python3)+Python3::Python below resolves
+# whatever interpreter this env's rclcpp was actually built against instead.
 get_filename_component(_ros_env_root "${rclcpp_DIR}/../../.." ABSOLUTE)  # share/rclcpp/cmake -> env root
 target_link_directories(gravity_feedforward_controller PRIVATE "${_ros_env_root}/lib")
-target_link_libraries(gravity_feedforward_controller python3.12)
+find_package(Python3 COMPONENTS Development REQUIRED)
+target_link_libraries(gravity_feedforward_controller Python3::Python)
 
 pluginlib_export_plugin_description_file(controller_interface gravity_feedforward_controller_plugin.xml)
 

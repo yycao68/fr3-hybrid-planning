@@ -394,6 +394,23 @@ def run_one(launch_file: str, bag_dir: str, extra_env: dict = None, goal: str = 
         pkill_stragglers()
 
     log(f"Bag written to {bag_dir}")
+    # External review finding: this used to return normally regardless of
+    # whether the action itself was rejected, timed out, or completed with a
+    # non-success MoveIt error code -- a caller that doesn't separately check
+    # the returned dict's own accepted/error_code fields could silently
+    # compute metrics from an incomplete bag. Action-layer failure is a
+    # distinct condition from the bag's own recorded task_success (computed
+    # separately, after the fact, by compute_metrics.py from real
+    # position/velocity convergence) -- raise here for the former without
+    # touching the latter; the bag above is already written before this
+    # check, so a caller that wants to inspect a failed run's own bag still
+    # can, from the exception's own message.
+    if not accepted:
+        raise RuntimeError(f"goal rejected or action server unavailable (bag: {bag_dir})")
+    if error_code != 1:
+        raise RuntimeError(
+            f"action did not complete with SUCCESS (accepted={accepted}, "
+            f"error_code={error_code}, bag: {bag_dir})")
     return {"accepted": accepted, "error_code": error_code, "bag_dir": bag_dir}
 
 
