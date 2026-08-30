@@ -217,7 +217,13 @@ def generate_launch_description():
         'FR3_ARM_CONTROLLER_YAML', 'fr3_ros_controllers.yaml')
     controller_config_file = os.path.join(
         bringup_share, 'config', controller_config_filename)
-    mujoco_model_path = os.path.join(bringup_share, 'mujoco_models', 'fr3.xml')
+    # Joint7-stall investigation (see ros2_ws/src/README.md's
+    # goal-execution-fragility writeup, damping/inertial-coupling
+    # isolation): FR3_MUJOCO_MODEL_FILENAME lets a modified MJCF be
+    # selected without touching this launch file's own default -- unset
+    # means the real, unmodified fr3.xml, a true no-op.
+    mujoco_model_filename = os.environ.get('FR3_MUJOCO_MODEL_FILENAME', 'fr3.xml')
+    mujoco_model_path = os.path.join(bringup_share, 'mujoco_models', mujoco_model_filename)
     node_mujoco_ros2_control = Node(
         package='mujoco_ros2_control',
         executable='mujoco_ros2_control',

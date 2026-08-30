@@ -531,10 +531,11 @@ HorizonTrajectoryOperator::getLocalTrajectory(const moveit::core::RobotState& cu
       // certificate math for every horizon step past the first.
       // addTrajectorySegment's own TimeOptimalTrajectoryGeneration::
       // computeTimeStamps call DOES populate real per-waypoint velocities
-      // on reference_trajectory_ itself -- linearly blend those between the
-      // bracketing waypoints (the same interpolation MoveIt already does
-      // for position) rather than relying on RobotState::interpolate to
-      // carry velocity through, which it doesn't.
+      // (and accelerations -- see below) on reference_trajectory_ itself --
+      // linearly blend those between the bracketing waypoints (the same
+      // interpolation MoveIt already does for position) rather than
+      // relying on RobotState::interpolate to carry them through, which it
+      // doesn't.
       int before = 0, after = 0;
       double blend = 0.0;
       reference_trajectory_->findWayPointIndicesForDurationAfterStart(duration, before, after, blend);
@@ -547,6 +548,29 @@ HorizonTrajectoryOperator::getLocalTrajectory(const moveit::core::RobotState& cu
         v_blend[k] = v_before[k] + blend * (v_after[k] - v_before[k]);
       }
       state_j->setJointGroupVelocities(joint_group_, v_blend);
+      // Same stale-value bug, same fix, for ACCELERATION -- caught in
+      // review after the velocity fix above shipped: RobotState::
+      // interpolate() only ever writes position_, so state_j's
+      // acceleration was STILL being left at whatever waypoint 0's own
+      // (near-zero, routes start at rest) acceleration was, for every
+      // horizon step past the first, exactly like velocity was before the
+      // fix above. This directly corrupted computeMPhysOverTrajectory's
+      // own tau = mass*qddot + bias -- qddot is the dominant term for any
+      // fast-accelerating motion (unscaled by mass, unlike the smaller
+      // Coriolis qdot^2-order contribution), so this likely made every
+      // m_phys/relative-margin number computed this session (including
+      // the fourth pass's "torque-margin retiming is structurally
+      // incapable" conclusion) more optimistic than the true physics --
+      // re-verify after this fix, don't assume the old numbers still hold.
+      std::vector<double> a_before, a_after;
+      reference_trajectory_->getWayPoint(before).copyJointGroupAccelerations(joint_group_, a_before);
+      reference_trajectory_->getWayPoint(after).copyJointGroupAccelerations(joint_group_, a_after);
+      std::vector<double> a_blend(a_before.size());
+      for (size_t k = 0; k < a_blend.size(); ++k)
+      {
+        a_blend[k] = a_before[k] + blend * (a_after[k] - a_before[k]);
+      }
+      state_j->setJointGroupAccelerations(joint_group_, a_blend);
       state_j->update();
     }
     local_trajectory.addSuffixWayPoint(*state_j, dt_);

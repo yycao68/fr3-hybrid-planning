@@ -1,0 +1,55 @@
+# Joint7-stall investigation (see ros2_ws/src/README.md's
+# goal-execution-fragility writeup, entry #30): the isolated open-loop
+# MuJoCo test found a real, sharp torque threshold for joint7 between 11
+# and 12 N*m at the stall pose -- below it, motion is blocked regardless
+# of damping/armature; above it (with joint7's own armature ablated),
+# motion breaks through cleanly. The real closed-loop controller only
+# ever generates ~4-7 N*m for joint7 (well under that threshold), so a
+# live re-run with damping/armature ablated STILL didn't unblock it --
+# the ablation never got exercised. This variant deliberately boosts
+# joint7's own P gain (10 -> 35) and i_clamp (3 -> 5) so that, given its
+# real ~0.4 rad steady-state error, P*error alone approaches/exceeds the
+# real 12 N*m actuator budget and gets pinned there by
+# mujoco_system.cpp's own real clamp -- testing whether SUSTAINED
+# near-maximum real torque (with the REAL, unablated model -- not the
+# diagnostic no-damping/no-armature one) can cross the threshold in the
+# actual live system, not just the isolated open-loop test. Everything
+# else identical to fr3_ros_controllers_gravity_ff.yaml. Opt-in via
+# FR3_ARM_CONTROLLER_YAML, does not touch the default.
+/**:
+  controller_manager:
+    ros__parameters:
+      update_rate: 500  # Hz
+
+      fr3_arm_controller:
+        type: fr3_gravity_ff_controller/GravityFeedforwardController
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+/**:
+  fr3_arm_controller:
+    ros__parameters:
+      command_interfaces:
+        - effort
+      state_interfaces:
+        - position
+        - velocity
+      joints:
+        - fr3_joint1
+        - fr3_joint2
+        - fr3_joint3
+        - fr3_joint4
+        - fr3_joint5
+        - fr3_joint6
+        - fr3_joint7
+      root_link: "fr3_link0"
+      tip_link: "fr3_link8"
+      gains:
+        fr3_joint1: { p: 300., d: 30., i: 5., i_clamp: 10. }
+        fr3_joint2: { p: 300., d: 30., i: 5., i_clamp: 10. }
+        fr3_joint3: { p: 300., d: 30., i: 5., i_clamp: 10. }
+        fr3_joint4: { p: 300., d: 30., i: 5., i_clamp: 10. }
+        fr3_joint5: { p: 50., d: 5., i: 3., i_clamp: 4. }
+        fr3_joint6: { p: 30., d: 5., i: 2., i_clamp: 3. }
+        fr3_joint7: { p: 35., d: 3., i: 1., i_clamp: 5. }
