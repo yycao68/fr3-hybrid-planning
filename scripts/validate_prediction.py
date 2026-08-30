@@ -87,7 +87,23 @@ def validate_predictions(bag_dir: str, dt: float = 0.02, quiet: bool = False):
     messages = read_bag(bag_dir)
     diag_msgs = messages.get("/diagnostics", [])
     b3_samples = []
-    for t, msg in diag_msgs:
+    for _bag_t, msg in diag_msgs:
+        # External review finding: `_bag_t` (rosbag2's own recv-time
+        # timestamp, from SequentialReader.read_next()) is wall-clock --
+        # `ros2 bag record` is invoked with no --use-sim-time (confirmed
+        # directly in run_experiment.py), so the recorder's own node
+        # defaults to system time for these timestamps. b3_constraint_solver
+        # publishes diag_msg.header.stamp = node_->now(), and THAT node
+        # (every launch file sets use_sim_time: true) genuinely returns
+        # sim time. binding_step*dt is also a sim-time-domain horizon (dt
+        # is the simulated control period) -- adding it onto a wall-clock
+        # timestamp mixes two different clocks, the EXACT bug class
+        # exp3_interaction_force.py's own find_execution_start_offset fix
+        # already found and fixed for a different script (mixing
+        # /global_trajectory's bag-recv time with force_t0's sim time gave
+        # a nonsense T_crossing<0 before that fix). Use the message's own
+        # header.stamp instead, consistently in the same sim-time domain
+        # binding_step*dt already is.
         for status in msg.status:
             if status.name != "b3_constraint_solver":
                 continue
@@ -97,8 +113,9 @@ def validate_predictions(bag_dir: str, dt: float = 0.02, quiet: bool = False):
             m_phys = float(kv["m_phys"])
             m_phys_observed = float(kv["m_phys_observed"])
             binding_step = int(kv["binding_step"])
+            stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
             if m_phys == m_phys and m_phys_observed == m_phys_observed:  # skip NaN (sticky-brake cycles)
-                b3_samples.append((t, m_phys, binding_step, m_phys_observed))
+                b3_samples.append((stamp_ns, m_phys, binding_step, m_phys_observed))
     b3_samples.sort(key=lambda x: x[0])
 
     if not b3_samples:
