@@ -32,11 +32,24 @@ namespace fr3_b3_local_planner
 // function already serves both B3ConstraintSolver's online per-cycle check
 // and HorizonTrajectoryOperator's route-level Level 1 retime search, so
 // one signature change threads force into both at once.
+// `min_relative_margin` (default nullptr, a true no-op for every existing
+// caller): if non-null, also writes min over every waypoint and joint of
+// (tau_max - |tau|) / tau_max -- a FRACTION of that joint's own budget,
+// not absolute N*m. Needed because a single absolute m_safe/m_phys value
+// (the return value above) can't meaningfully bound joints with very
+// different tau_max at once (87 N*m base joints vs 12 N*m wrist joints on
+// this platform) -- see route_retime_search.hpp's searchRetimeLambdaRelative
+// for why this exists (goal-execution-fragility oscillation root cause:
+// fr3_ros_controllers.yaml's joint_trajectory_controller has no
+// feedforward term, so the reference's own idealized torque demand needs
+// real relative headroom on EVERY joint for the feedback loop to have
+// budget left to correct tracking error, not just the tiny absolute
+// m_safe used for the online safety net's own different purpose).
 double computeMPhysOverTrajectory(const fr3_dynamics::FrankaChainDynamics& dynamics,
                                    const Eigen::VectorXd& tau_max, const Eigen::VectorXd& delta_tau,
                                    const robot_trajectory::RobotTrajectory& trajectory, int& binding_step,
                                    const char* log_tag = "horizon",
                                    const fr3_dynamics::ForceSchedule* force_schedule = nullptr,
-                                   double force_t0 = 0.0);
+                                   double force_t0 = 0.0, double* min_relative_margin = nullptr);
 
 }  // namespace fr3_b3_local_planner

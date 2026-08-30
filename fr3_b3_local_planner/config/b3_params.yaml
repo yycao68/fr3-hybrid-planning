@@ -16,6 +16,12 @@ b3:
   qddot_box: 8.0
   delta_tau_fraction: 0.05
   lam_max: 4.0
+  # Goal-execution-fragility oscillation fix (route_retime_search.hpp's
+  # searchRetimeLambdaRelative): target relative torque-margin headroom
+  # (fraction of tau_max) the IDEALIZED reference alone must leave on
+  # every joint, since fr3_ros_controllers.yaml's controller has no
+  # feedforward term and needs real budget left for feedback correction.
+  pretrack_relative_margin: 0.5
   reshape_w_acc: 1.0
   reshape_w_pos: 0.1
   reshape_w_vel: 0.1

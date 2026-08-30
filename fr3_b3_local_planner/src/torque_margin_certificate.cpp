@@ -19,11 +19,12 @@ double computeMPhysOverTrajectory(const fr3_dynamics::FrankaChainDynamics& dynam
                                    const Eigen::VectorXd& tau_max, const Eigen::VectorXd& delta_tau,
                                    const robot_trajectory::RobotTrajectory& trajectory, int& binding_step,
                                    const char* log_tag, const fr3_dynamics::ForceSchedule* force_schedule,
-                                   double force_t0)
+                                   double force_t0, double* min_relative_margin)
 {
   const unsigned int num_joints = dynamics.numJoints();
   const moveit::core::JointModelGroup* jmg = trajectory.getGroup();
   double m_phys = std::numeric_limits<double>::infinity();
+  double min_rel = std::numeric_limits<double>::infinity();
   binding_step = -1;
   const bool debug = std::getenv("B3_DEBUG_HORIZON") != nullptr;
 
@@ -102,12 +103,21 @@ double computeMPhysOverTrajectory(const fr3_dynamics::FrankaChainDynamics& dynam
         m_phys = m;
         binding_step = static_cast<int>(j);
       }
+      if (min_relative_margin != nullptr)
+      {
+        const double rel = (tau_max(i) - std::abs(tau(i))) / tau_max(i);
+        min_rel = std::min(min_rel, rel);
+      }
     }
     if (debug)
     {
       RCLCPP_INFO(LOGGER, "B3 debug [%s]: step %zu t=%.4f ee_z=%.4f step_min_margin=%.4f", log_tag, j, t, ee_z,
                   step_min);
     }
+  }
+  if (min_relative_margin != nullptr)
+  {
+    *min_relative_margin = min_rel;
   }
   return m_phys;
 }

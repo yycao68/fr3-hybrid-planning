@@ -47,4 +47,30 @@ std::optional<double> searchRetimeLambda(const fr3_dynamics::FrankaChainDynamics
                                           const fr3_dynamics::ForceSchedule* force_schedule = nullptr,
                                           double force_t0 = 0.0);
 
+// Goal-execution-fragility oscillation fix: same search structure as
+// searchRetimeLambda (grid + bisection, no assumed monotonicity), but
+// targets computeMPhysOverTrajectory's RELATIVE margin output (a fraction
+// of each joint's own tau_max) instead of the absolute m_safe. Motivation:
+// fr3_ros_controllers.yaml's joint_trajectory_controller has NO
+// feedforward term (position/velocity-error PID only) -- confirmed live
+// via /fr3_arm_controller/controller_state that its own PID-computed
+// effort demand saturates the real torque limit 42-60% of cycles on
+// EVERY joint (up to 2.7-3x over budget) whenever the reference's own
+// idealized open-loop torque (what computeMPhysOverTrajectory's ordinary
+// return value already checks) leaves little relative headroom, since the
+// feedback loop then has no budget left to also correct tracking error.
+// The existing absolute m_safe (searchRetimeLambda, used for the online
+// safety net) is deliberately a small last-resort buffer for a different
+// purpose and is a poor fit here: a single absolute N*m margin can't
+// meaningfully bound both 87 N*m base joints and 12 N*m wrist joints at
+// once. `target_relative_margin` is a fraction in [0, 1) -- e.g. 0.5 means
+// the idealized reference alone must stay under 50% of tau_max on every
+// joint, every waypoint, leaving the other 50% for feedback correction.
+std::optional<double> searchRetimeLambdaRelative(const fr3_dynamics::FrankaChainDynamics& dynamics,
+                                                   const Eigen::VectorXd& tau_max, const Eigen::VectorXd& delta_tau,
+                                                   double target_relative_margin, double lam_max,
+                                                   const robot_trajectory::RobotTrajectory& traj,
+                                                   const fr3_dynamics::ForceSchedule* force_schedule = nullptr,
+                                                   double force_t0 = 0.0);
+
 }  // namespace fr3_b3_local_planner

@@ -106,6 +106,11 @@ private:
   Eigen::VectorXd delta_tau_;
   double m_safe_{ 2.0 };
   double lam_max_{ 4.0 };
+  // Goal-execution-fragility oscillation fix: route-level pre-retiming
+  // pass (addTrajectorySegment, before the existing Level 1/2/3 cascade)
+  // targeting a RELATIVE torque margin -- see route_retime_search.hpp's
+  // searchRetimeLambdaRelative for the full motivation.
+  double pretrack_relative_margin_{ 0.5 };
 
   // Phase 3c, Level 2 (route-level reshape): tried once retiming (above)
   // is confirmed exhausted, pinned to reach the route's own original goal

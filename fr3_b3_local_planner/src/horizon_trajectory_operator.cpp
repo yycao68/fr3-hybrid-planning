@@ -55,6 +55,11 @@ bool HorizonTrajectoryOperator::initialize(const rclcpp::Node::SharedPtr& node,
                                          : node_->declare_parameter<double>("b3.delta_tau_fraction", 0.05);
   lam_max_ = node_->has_parameter("b3.lam_max") ? node_->get_parameter("b3.lam_max").as_double()
                                                  : node_->declare_parameter<double>("b3.lam_max", 4.0);
+  // Goal-execution-fragility oscillation fix (see route_retime_search.hpp's
+  // searchRetimeLambdaRelative for the full motivation): only this plugin
+  // (route-level, once per segment) needs this -- not shared with
+  // B3ConstraintSolver, so no has_parameter guard needed.
+  pretrack_relative_margin_ = node_->declare_parameter<double>("b3.pretrack_relative_margin", 0.5);
   qddot_box_ = node_->has_parameter("b3.qddot_box") ? node_->get_parameter("b3.qddot_box").as_double()
                                                      : node_->declare_parameter<double>("b3.qddot_box", 8.0);
   reshape_w_acc_ = node_->has_parameter("b3.reshape_w_acc")
@@ -165,6 +170,54 @@ HorizonTrajectoryOperator::addTrajectorySegment(const robot_trajectory::RobotTra
       (force_schedule_enabled_ && force_known_at_plan_time_) ? &force_schedule_ : nullptr;
   const double force_t_now =
       (force_schedule != nullptr && force_started_) ? (node_->now().seconds() - force_t0_sec_) : 0.0;
+
+  // Goal-execution-fragility oscillation fix: torque-CAPACITY-aware
+  // pre-retiming, ahead of the existing Level 1/2/3 cascade below (whose
+  // own m_safe_ is a small ABSOLUTE last-resort buffer for a different
+  // purpose -- catching genuine dynamic infeasibility -- and is already
+  // comfortably satisfied by the reference alone on every goal tried so
+  // far, so that cascade never actually runs for this problem). Root
+  // cause (see README "Known environmental gaps"): fr3_ros_controllers.yaml's
+  // joint_trajectory_controller has NO feedforward term, so ALL torque
+  // needed to track the reference -- not just disturbance correction --
+  // must come from tracking error alone. If the reference's own idealized
+  // open-loop torque already uses most of a joint's tau_max, the feedback
+  // loop has no budget left and saturates -- confirmed directly via
+  // /fr3_arm_controller/controller_state (PID effort demand >= tau_max on
+  // 42-60% of cycles, every joint, up to 2.7-3x over budget, on the
+  // "large" goal at the pre-fix scale). Slows the whole route down (via
+  // the same retimeTrajectory transform Level 1 already uses) until every
+  // joint's own idealized demand stays under pretrack_relative_margin_'s
+  // fraction of its own tau_max, leaving real headroom for the feedback
+  // loop to operate within.
+  {
+    double rel_margin = 1.0;
+    int pretrack_binding_step = -1;
+    computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reference_trajectory_, pretrack_binding_step,
+                                "pretrack", force_schedule, force_t_now, &rel_margin);
+    if (rel_margin < pretrack_relative_margin_)
+    {
+      const std::optional<double> pretrack_lambda = searchRetimeLambdaRelative(
+          dynamics_, tau_max_, delta_tau_, pretrack_relative_margin_, lam_max_, *reference_trajectory_,
+          force_schedule, force_t_now);
+      if (pretrack_lambda.has_value())
+      {
+        reference_trajectory_ = std::make_shared<robot_trajectory::RobotTrajectory>(
+            retimeTrajectory(*reference_trajectory_, pretrack_lambda.value()));
+        RCLCPP_INFO(LOGGER,
+                    "B3: torque-capacity pre-retime applied: lambda=%.3f, relative margin %.3f -> target %.3f",
+                    pretrack_lambda.value(), rel_margin, pretrack_relative_margin_);
+      }
+      else
+      {
+        RCLCPP_INFO(LOGGER,
+                    "B3: torque-capacity pre-retime exhausted -- relative margin %.3f < target %.3f at no "
+                    "lambda in [1, %.3f]; proceeding with un-slowed reference",
+                    rel_margin, pretrack_relative_margin_, lam_max_);
+      }
+    }
+  }
+
   int binding_step = -1;
   const double m0 = computeMPhysOverTrajectory(dynamics_, tau_max_, delta_tau_, *reference_trajectory_, binding_step,
                                                 "whole-route", force_schedule, force_t_now);
@@ -455,6 +508,46 @@ HorizonTrajectoryOperator::getLocalTrajectory(const moveit::core::RobotState& cu
       // "strictly past the end: hold position" behavior).
       state_j = std::make_shared<moveit::core::RobotState>(
         reference_trajectory_->getWayPoint(reference_trajectory_->getWayPointCount() - 1));
+    }
+    else
+    {
+      // Oscillation fix: RobotState::interpolate (called inside
+      // getStateAtDurationFromStart) only ever writes position_ -- confirmed
+      // by reading moveit's own robot_state.h (interpolate() delegates to
+      // JointModel::interpolate on the position arrays only, never touching
+      // velocity_/acceleration_). Left alone, state_j keeps whatever
+      // velocity the copy-constructor above seeded it with (reference_
+      // trajectory_'s waypoint 0, i.e. the route's OWN starting velocity --
+      // normally ~0 since routes start at rest), regardless of which point
+      // along the route duration is actually being sampled. Every commanded
+      // horizon waypoint beyond the very first therefore carried a near-
+      // zero velocity boundary condition into the published
+      // JointTrajectory every single 50Hz cycle, forcing the low-level
+      // joint_trajectory_controller to decelerate to a stop and then
+      // re-accelerate every 20ms even mid-trajectory -- the oscillation
+      // observed live and confirmed in bag data (thousands of local extrema
+      // per joint over a ~200s "large"-goal run). It also fed the same
+      // stale near-zero velocity into computeMPhysOverTrajectory's own
+      // certificate math for every horizon step past the first.
+      // addTrajectorySegment's own TimeOptimalTrajectoryGeneration::
+      // computeTimeStamps call DOES populate real per-waypoint velocities
+      // on reference_trajectory_ itself -- linearly blend those between the
+      // bracketing waypoints (the same interpolation MoveIt already does
+      // for position) rather than relying on RobotState::interpolate to
+      // carry velocity through, which it doesn't.
+      int before = 0, after = 0;
+      double blend = 0.0;
+      reference_trajectory_->findWayPointIndicesForDurationAfterStart(duration, before, after, blend);
+      std::vector<double> v_before, v_after;
+      reference_trajectory_->getWayPoint(before).copyJointGroupVelocities(joint_group_, v_before);
+      reference_trajectory_->getWayPoint(after).copyJointGroupVelocities(joint_group_, v_after);
+      std::vector<double> v_blend(v_before.size());
+      for (size_t k = 0; k < v_blend.size(); ++k)
+      {
+        v_blend[k] = v_before[k] + blend * (v_after[k] - v_before[k]);
+      }
+      state_j->setJointGroupVelocities(joint_group_, v_blend);
+      state_j->update();
     }
     local_trajectory.addSuffixWayPoint(*state_j, dt_);
   }

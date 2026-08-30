@@ -122,4 +122,78 @@ std::optional<double> searchRetimeLambda(const fr3_dynamics::FrankaChainDynamics
   return hi;
 }
 
+std::optional<double> searchRetimeLambdaRelative(const fr3_dynamics::FrankaChainDynamics& dynamics,
+                                                   const Eigen::VectorXd& tau_max, const Eigen::VectorXd& delta_tau,
+                                                   double target_relative_margin, double lam_max,
+                                                   const robot_trajectory::RobotTrajectory& traj,
+                                                   const fr3_dynamics::ForceSchedule* force_schedule, double force_t0)
+{
+  int binding_step = -1;
+  auto rel_margin_at = [&](double lambda) {
+    robot_trajectory::RobotTrajectory retimed = retimeTrajectory(traj, lambda);
+    double rel = -std::numeric_limits<double>::infinity();
+    computeMPhysOverTrajectory(dynamics, tau_max, delta_tau, retimed, binding_step, "pretrack", force_schedule,
+                                force_t0, &rel);
+    return rel;
+  };
+
+  const double rel_at_max = rel_margin_at(lam_max);
+  if (rel_at_max >= target_relative_margin)
+  {
+    // Fast path: same bisection-under-unfalsified-monotonicity assumption
+    // as searchRetimeLambda -- see that function's own comment.
+    double lo = 1.0, hi = lam_max;
+    for (int iter = 0; iter < 20; ++iter)
+    {
+      const double mid = 0.5 * (lo + hi);
+      if (rel_margin_at(mid) >= target_relative_margin)
+      {
+        hi = mid;
+      }
+      else
+      {
+        lo = mid;
+      }
+    }
+    return hi;
+  }
+
+  // lambda_max alone fails: dense-scan before concluding it's exhausted,
+  // same reasoning as searchRetimeLambda (this margin function is not
+  // assumed monotonic either).
+  constexpr int kGridPoints = 41;
+  std::vector<double> grid(kGridPoints);
+  std::vector<double> margins(kGridPoints);
+  int first_feasible = -1;
+  for (int i = 0; i < kGridPoints; ++i)
+  {
+    grid[i] = 1.0 + (lam_max - 1.0) * static_cast<double>(i) / static_cast<double>(kGridPoints - 1);
+    margins[i] = rel_margin_at(grid[i]);
+    if (first_feasible < 0 && margins[i] >= target_relative_margin)
+    {
+      first_feasible = i;
+    }
+  }
+  if (first_feasible < 0)
+  {
+    return std::nullopt;
+  }
+
+  double lo = grid[std::max(first_feasible - 1, 0)];
+  double hi = grid[first_feasible];
+  for (int iter = 0; iter < 20; ++iter)
+  {
+    const double mid = 0.5 * (lo + hi);
+    if (rel_margin_at(mid) >= target_relative_margin)
+    {
+      hi = mid;
+    }
+    else
+    {
+      lo = mid;
+    }
+  }
+  return hi;
+}
+
 }  // namespace fr3_b3_local_planner

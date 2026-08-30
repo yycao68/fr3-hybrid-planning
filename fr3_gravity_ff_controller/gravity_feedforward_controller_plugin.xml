@@ -1,0 +1,12 @@
+<library path="gravity_feedforward_controller">
+  <class name="fr3_gravity_ff_controller/GravityFeedforwardController"
+         type="fr3_gravity_ff_controller::GravityFeedforwardController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Goal-execution-fragility oscillation fix: PD position/velocity control
+      plus gravity+Coriolis feedforward (via fr3_dynamics), effort command
+      interface -- drop-in replacement for joint_trajectory_controller as
+      fr3_arm_controller.
+    </description>
+  </class>
+</library>

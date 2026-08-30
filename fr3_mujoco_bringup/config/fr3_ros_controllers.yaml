@@ -39,10 +39,10 @@
         - fr3_joint6
         - fr3_joint7
       gains:
-        fr3_joint1: { p: 600., d: 30., i: 0., i_clamp: 1. }
-        fr3_joint2: { p: 600., d: 30., i: 0., i_clamp: 1. }
-        fr3_joint3: { p: 600., d: 30., i: 0., i_clamp: 1. }
-        fr3_joint4: { p: 600., d: 30., i: 0., i_clamp: 1. }
+        fr3_joint1: { p: 300., d: 30., i: 0., i_clamp: 1. }
+        fr3_joint2: { p: 300., d: 30., i: 0., i_clamp: 1. }
+        fr3_joint3: { p: 300., d: 30., i: 0., i_clamp: 1. }
+        fr3_joint4: { p: 300., d: 30., i: 0., i_clamp: 1. }
         fr3_joint5: { p: 50., d: 5., i: 0., i_clamp: 1. }
         fr3_joint6: { p: 30., d: 5., i: 0., i_clamp: 1. }
         fr3_joint7: { p: 10., d: 3., i: 0., i_clamp: 1. }

@@ -197,8 +197,14 @@ def generate_launch_description():
         parameters=[robot_description, {'use_sim_time': True}],
     )
 
+    # Goal-execution-fragility oscillation fix: FR3_ARM_CONTROLLER_YAML lets
+    # fr3_gravity_ff_controller be selected instead of the stock
+    # joint_trajectory_controller without touching this launch file --
+    # default is the exact prior filename, a true no-op.
+    controller_config_filename = os.environ.get(
+        'FR3_ARM_CONTROLLER_YAML', 'fr3_ros_controllers.yaml')
     controller_config_file = os.path.join(
-        bringup_share, 'config', 'fr3_ros_controllers.yaml')
+        bringup_share, 'config', controller_config_filename)
     mujoco_model_path = os.path.join(bringup_share, 'mujoco_models', 'fr3.xml')
     node_mujoco_ros2_control = Node(
         package='mujoco_ros2_control',

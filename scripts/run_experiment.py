@@ -352,7 +352,17 @@ def run_one(launch_file: str, bag_dir: str, extra_env: dict = None, goal: str = 
 
     bag_proc = subprocess.Popen(
         ["ros2", "bag", "record", "-o", bag_dir,
-         "/joint_states", "/diagnostics", "/rosout", "/global_trajectory", "/fr3_experiment/goal_sent"],
+         "/joint_states", "/diagnostics", "/rosout", "/global_trajectory", "/fr3_experiment/goal_sent",
+         # Oscillation investigation: the actual per-cycle COMMANDED
+         # trajectory stream to the low-level controller, and its own
+         # tracking-state feedback -- previously unrecorded, so there was no
+         # way to see whether the command stream itself is smooth (pointing
+         # at a servo/control-loop cause) or already jittery (pointing back
+         # at planning). controller_state may not exist if joint_trajectory_
+         # controller's default state-publishing isn't enabled; ros2 bag
+         # record simply won't capture anything for a topic with no
+         # publisher, which is fine.
+         "/fr3_arm_controller/joint_trajectory", "/fr3_arm_controller/controller_state"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
     )
     try:
